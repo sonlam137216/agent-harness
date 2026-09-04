@@ -1,0 +1,36 @@
+{
+  "name": "agent-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.13.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "format": "prettier --write src test package.json tsconfig.json eslint.config.mjs prettier.config.mjs",
+    "format:check": "prettier --check src test package.json tsconfig.json eslint.config.mjs prettier.config.mjs",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "validate": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.1.0",
+    "@opentelemetry/resources": "^2.1.0",
+    "@opentelemetry/sdk-trace-base": "^2.1.0",
+    "@opentelemetry/sdk-trace-node": "^2.1.0",
+    "pino": "^9.9.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.18.0",
+    "eslint": "^10.9.1",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.41.0",
+    "vitest": "^3.2.4"
+  }
+}
