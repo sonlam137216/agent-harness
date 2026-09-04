@@ -25,7 +25,7 @@ This is the target dependency shape. It is not the Phase 0 project scaffold.
                               │
                               ▼
                     ┌──────────────────┐
-                    │   SessionActor   │
+                    │  SessionRuntime  │
                     └────────┬─────────┘
                              │
                   ┌──────────▼──────────┐
@@ -70,7 +70,7 @@ A single user turn should follow this conceptual flow:
 User Prompt
     │
     ▼
-SessionActor
+SessionRuntime
     │
     ├── record input in session state
     │
@@ -127,23 +127,34 @@ Suggested location:
 
 ```text
 src/runtime/
-├── session-actor.ts
+├── session-runtime.ts
 └── agent-loop.ts
 ```
 
-Responsibilities:
+`SessionRuntime` responsibilities:
 
-- coordinate one session
-- allow at most one active turn for that session
+- create or load a session through `SessionStore`
 - execute one user turn
+- create and persist the turn's user message
+- delegate model/tool iteration to `AgentLoop`
+- persist the resulting session state
+- own the `session.run` and `turn.run` trace spans
+
+`AgentLoop` responsibilities:
+
 - drive model/tool iterations
 - decide whether a turn continues or stops
 - enforce cancellation and loop iteration limits
-- emit runtime lifecycle events
 
-`SessionActor` is initially an in-process coordinator. It does not require an actor framework, background worker, or distributed mailbox. If those semantics are needed later, they must be introduced by a roadmap capability and preserve this boundary.
+The Phase 1 `SessionRuntime` is a synchronous coordinator around one call. It has no actor, mailbox, queue, background-processing, or concurrency-management semantics. If concurrency control is needed later, it must be introduced by its own roadmap capability without moving model/tool iteration out of `AgentLoop`.
 
 `Turn` belongs to Session state. Runtime operates on it but does not define a parallel turn representation.
+
+The Phase 1 `AgentLoop` accepts an immutable `Session` containing the target in-progress turn and returns an updated immutable Session. It does not load or save `SessionStore`; `SessionRuntime` owns loading and persistence around the loop.
+
+Each iteration creates a model call ID, builds provider-neutral context, calls `Sampler`, appends the normalized assistant response, dispatches tool calls sequentially through `ToolBridge`, appends their normalized results, and either repeats or stops. A configurable model-iteration limit terminates runaway loops. The loop performs no provider or tool retries.
+
+Cancellation and an absolute deadline are combined into one signal propagated to both `Sampler` and `ToolBridge`; the original absolute deadline is also passed to `Sampler`. Provider-neutral sampling failures classified as cancellation/deadline terminate the turn accordingly. Other sampling failures remain surfaced to `SessionRuntime`, which records a failed turn before rethrowing the error.
 
 The runtime must not directly:
 
@@ -193,11 +204,13 @@ Tool profiles, permission modes, compaction policies, role hierarchies, and buil
 ### 4.3 Model / Sampler
 
 ```text
+src/json.ts
+
 src/model/
 ├── sampler.interface.ts
 ├── sampling-types.ts
 └── providers/
-    └── <one-provider>-sampler.ts
+    └── openai-responses-sampler.ts
 ```
 
 `Sampler` is the only interface the runtime uses to communicate with a model.
@@ -205,21 +218,31 @@ src/model/
 Conceptual contract:
 
 ```text
-sample(ModelRequest)
+sample(ModelRequest, SamplingOptions)
     →
 ModelResponse
-├── text
-├── reasoning metadata
+├── model call ID
+├── text or null
 ├── tool calls
-├── usage
+├── token usage
 └── stop reason
 ```
+
+`ModelRequest` contains a provider-neutral model ID, ordered system/user/assistant/tool messages, and model-facing tool definitions. `SamplingOptions` carries an optional `AbortSignal` and absolute deadline. Tool schemas and normalized tool arguments use the harness-owned JSON value types shared with Session.
+
+Provider adapters must return normalized tool calls and preserve the request's model call correlation ID in the response. Provider wire formats, SDK request objects, raw responses, and provider-specific option types must not cross the Sampler boundary.
 
 Provider-specific formats stay inside sampler implementations.
 
 This makes model swapping possible without changing agent orchestration.
 
-Phase 1 implements one provider only. Add another adapter when it is actually needed; do not scaffold placeholder provider files.
+Phase 1 implements one provider only: `OpenAIResponsesSampler`. It maps the provider-neutral transcript to the non-streaming OpenAI Responses wire format and maps output text, function calls, token usage, and completion status back to the shared contract. The adapter uses the platform HTTP transport directly, so no provider SDK types or transport objects cross the `Sampler` boundary. Provider-side response storage is disabled because Session owns the transcript.
+
+`OpenAIResponsesSampler` owns cancellation/deadline enforcement and bounded transient retries. It retries transport unavailability and provider responses classified as transient (`408`, `409`, retryable `429`, and `5xx`), honors a bounded `Retry-After`, and defaults to at most two retries after the initial request. Invalid requests, authentication failures, exhausted quota, invalid provider payloads, and cancellation are not retried. Raw error bodies remain private; failures crossing the boundary are sanitized `SamplingError` values. AgentLoop does not inspect provider status codes or implement provider retry policy, and tool execution is never retried by the sampler.
+
+The current shared contract is sufficient for the Phase 1 portable transcript loop and therefore remains unchanged. One intentionally deferred interoperability boundary is provider-owned opaque continuation data, such as reasoning items that some model modes require to be replayed verbatim. Phase 1 neither leaks those wire items into Session nor adds stateful provider-response chaining. Support for such modes requires a separate provider-neutral continuation design before it is enabled.
+
+Add another adapter only when it is actually needed; do not scaffold placeholder provider files.
 
 ---
 
@@ -229,22 +252,31 @@ Phase 1 implements one provider only. Add another adapter when it is actually ne
 src/session/
 ├── session.ts
 ├── turn.ts
-├── chat-state.ts
-└── session-store.ts
+├── session-store.ts
+└── in-memory-session-store.ts
 ```
 
-Session state includes:
+The minimal Phase 1 state is:
 
-- user messages
-- assistant messages
-- tool calls
-- tool results
-- turns
-- token usage
-- model metadata
-- runtime metadata
+```text
+Session
+├── session ID
+└── ordered turns
+
+Turn
+├── turn ID
+├── status
+└── ordered entries
+    ├── user message
+    ├── assistant message + model call ID + tool calls
+    └── tool result + matching tool call ID
+```
+
+Tool arguments and results use harness-owned JSON value types. Session state must not depend on provider SDK request/response types.
 
 Start with an in-memory `SessionStore`. The stable store port preserves a persistence seam, but durability is not promised until Phase 4. Do not create both `SessionStore` and `SessionRepository` for the same responsibility.
+
+Do not introduce a separate `ChatState` until it has a responsibility distinct from the session's ordered turns. Token accounting and richer model/runtime metadata are added by their owning slices.
 
 When runtime events are introduced in Phase 3, use one canonical event model. Do not duplicate session, runtime, and global event types for the same lifecycle fact. Full event sourcing remains optional.
 
@@ -254,14 +286,14 @@ When runtime events are introduced in Phase 3, use one canonical event model. Do
 
 ```text
 src/context/
-├── context-builder.ts
-├── context-budget.ts
-├── context-source.ts
-├── compaction.ts
-└── retrieval/
+└── context-builder.ts
 ```
 
 Phase 1 includes only a minimal `ContextBuilder` that assembles system instructions, conversation messages, and native tool definitions. Phase 2 turns this seam into the explicit, budget-aware Context Engine shown above.
+
+Its Phase 1 contract accepts an `AgentDefinition`, the current `Session`, a runtime-owned model call ID, and already-selected native `ModelToolDefinition` values. It returns the provider-neutral `ModelRequest` consumed by `Sampler`. It preserves turn and entry order, performs no tool execution or discovery, and does not read project files.
+
+The builder emits one `context.build` span with structural counts. Prompt contents and tool arguments are not recorded as trace attributes. Token budgeting, pluggable context sources, project rules, pruning, and compaction remain Phase 2 additions; do not scaffold them in Phase 1.
 
 The Context Engine answers:
 
@@ -298,13 +330,26 @@ Future token-saving systems such as GitNexus, AST graphs, symbol indexes, semant
 ```text
 src/tools/
 ├── tool.interface.ts
+├── tool-types.ts
+├── tool-result.ts
 ├── tool-registry.ts
 ├── tool-bridge.ts
-├── tool-result.ts
 └── builtin/
+    ├── input-validation.ts
+    ├── read-file.tool.ts
+    ├── list-files.tool.ts
+    └── search-text.tool.ts
 ```
 
-`ToolBridge` is the single entry point from Runtime to Tools.
+The initial tool runtime foundation defines one provider-neutral `Tool` contract, canonical tool call/result types, and a registry. `ToolDefinition` contains the model-facing name, description, and input schema plus an internal access-kind classification. The registry projects definitions to `ModelToolDefinition` without exposing that internal classification.
+
+`ToolRegistry` owns registration, lookup, and model-definition listing only. Duplicate names are rejected. Registration and lookup never validate arguments, evaluate permissions, emit execution spans, or invoke a tool.
+
+`ToolBridge` is the single entry point from Runtime to Tools. Its Phase 1 execution context requires session and turn correlation IDs and optionally carries an `AbortSignal`. It resolves tools only through `ToolRegistry`, validates with the selected tool's input validator, and emits one `tool.execute` span.
+
+Phase 1 permits only tools classified as `read`; other access kinds return `access_denied` without dispatch. This is a narrow bootstrap guard, not the Phase 3 permission engine or an approval flow. Tool operations are never retried by the bridge.
+
+Unknown tools, invalid arguments, cancellation, mismatched result correlation, and unexpected thrown failures become bounded structured `ToolResult` failures. Trace attributes include correlation IDs and safe structural classification only; raw arguments, outputs, and exception messages are not recorded.
 
 Conceptual pipeline:
 
@@ -348,21 +393,29 @@ Initial built-in tools:
 
 `ToolBridge` owns this dispatch pipeline; do not add a separate executor until a distinct execution responsibility appears. Before Phase 3, a minimal `PermissionPolicy` must deny mutations by default or explicitly authorize them. Full rules, approval flows, and hooks arrive in Phase 3.
 
+The `Tool` contract accepts a normalized `ToolCall` plus optional cancellation and returns a normalized `ToolResult`. Native tools validate their own input contract and convert capability failures into bounded structured failures. `ToolBridge` rejects invalid calls before dispatch and normalizes registry, access, or unexpected pipeline failures while preserving this canonical result shape.
+
+Phase 1 read-only native tools are `read_file`, `list_files`, and `search_text`. They depend only on `FileSystemCapability`; they never import Node.js filesystem APIs. `search_text` owns literal matching, recursion, and bounded match formatting while composing the capability's read/list operations.
+
 ---
 
 ### 4.7 Workspace
 
 ```text
 src/workspace/
-├── workspace.interface.ts
-├── local-workspace.ts
-└── capabilities/
-    ├── filesystem.ts
-    ├── command.ts
-    └── git.ts
+├── filesystem-capability.ts
+└── local-file-system.ts
 ```
 
 Workspace represents the environment in which tools operate.
+
+Phase 1 starts with one narrow read-only `FileSystemCapability`, not a broad `Workspace` interface. It supports bounded UTF-8 file reads and bounded, non-recursive directory listings. Paths are workspace-relative; `.` addresses the configured root. Absolute paths, lexical `..` escapes, and existing paths whose canonical targets resolve through symlinks outside the canonical workspace root are rejected.
+
+The local adapter requires an absolute configured root. Its default limits are 1 MiB per file read and 1,000 entries per directory listing. Exceeding a limit is an explicit error rather than silent truncation. Cancellation is checked before and during bounded operations where the Node.js filesystem primitives permit it.
+
+Text matching, recursion policy, and match formatting belong to the `search_text` tool. That tool composes this capability's read/list operations; it does not call filesystem or command APIs directly.
+
+Each local operation emits one `workspace.operation` span at the adapter boundary. It records operation kind, success, duration, and safe output counts, but not requested paths or file contents.
 
 Workspace owns the environment and exposes narrow capabilities. A tool should receive only the capability it needs, for example:
 
@@ -707,10 +760,26 @@ The executable entry point owns dependency construction:
 ```text
 CLI composition root
   → creates Sampler, SessionStore, ContextBuilder, ToolBridge, Workspace
-  → injects them into SessionActor / AgentLoop
+  → injects them into SessionRuntime / AgentLoop
 ```
 
 Do not hide initial wiring behind a dependency-injection framework. Runtime components consume interfaces and must not instantiate provider SDKs, concrete workspaces, or telemetry backends themselves.
+
+The Phase 1 composition root lives in `src/cli/phase-one-cli.ts`. It constructs the in-memory `SessionStore`, `ContextBuilder`, `AgentLoop`, read-only tool registry and bridge, and local filesystem capability around an injected `Sampler` and tracer. Injecting these two existing boundaries keeps the same path runnable with either `OpenAIResponsesSampler` or a deterministic fake without adding a second runtime path.
+
+### 4.19 Phase 1 CLI
+
+```text
+src/cli/
+├── main.ts
+└── phase-one-cli.ts
+```
+
+The CLI is a one-shot presentation and composition boundary. It accepts one prompt, resolves a model ID into the existing `AgentDefinition.model.modelId` field, selects a workspace root, calls `SessionRuntime` once, and prints the final answer. It does not inspect or reproduce model/tool loop state, dispatch tools, or own session orchestration.
+
+The model ID is selected with `--model` or `AGENT_HARNESS_MODEL`. `OPENAI_API_KEY` configures the concrete OpenAI adapter and is never accepted as a command-line argument. `--workspace` defaults to the current directory and is resolved to the absolute root enforced by `LocalFileSystemCapability`.
+
+Phase 1 remains intentionally one-shot and in-memory. There is no REPL/TUI, permission prompt, resume command, background work, or persistent session storage. Existing runtime spans provide tool/model activity when the default console tracing exporter is used; the CLI does not create duplicate lifecycle spans.
 
 ---
 
@@ -746,7 +815,7 @@ Disallowed:
 Workspace → AgentLoop       ❌
 Tool → Sampler              ❌
 Tool → provider SDK         ❌
-MCP → SessionActor          ❌
+MCP → SessionRuntime        ❌
 Memory → Workspace mutation ❌
 Context → shell execution   ❌
 Runtime → concrete provider ❌
@@ -827,7 +896,7 @@ User
  ↓
 CLI
  ↓
-SessionActor
+SessionRuntime
  ↓
 AgentLoop
  ↓

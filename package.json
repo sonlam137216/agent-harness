@@ -9,15 +9,18 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "cli": "pnpm build && node dist/src/cli/main.js",
     "format": "prettier --write src test package.json tsconfig.json eslint.config.mjs prettier.config.mjs",
     "format:check": "prettier --check src test package.json tsconfig.json eslint.config.mjs prettier.config.mjs",
     "lint": "eslint .",
+    "smoke": "vitest run test/cli/phase-one-cli.test.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "validate": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/context-async-hooks": "^2.1.0",
     "@opentelemetry/core": "^2.1.0",
     "@opentelemetry/resources": "^2.1.0",
     "@opentelemetry/sdk-trace-base": "^2.1.0",

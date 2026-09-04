@@ -1,4 +1,5 @@
-import { trace, type Tracer } from '@opentelemetry/api';
+import { context, trace, type Tracer } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import {
@@ -10,6 +11,7 @@ import {
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 
 const DEFAULT_TRACER_NAME = 'agent-harness';
+let contextManagerInstallationAttempted = false;
 
 export interface TracingOptions {
   exporter?: SpanExporter;
@@ -80,10 +82,21 @@ function createNoopTracing(tracerName: string): TracingHandle {
   };
 }
 
+function ensureAsyncContextPropagation(): void {
+  if (contextManagerInstallationAttempted) return;
+  contextManagerInstallationAttempted = true;
+
+  const contextManager = new AsyncLocalStorageContextManager().enable();
+  if (!context.setGlobalContextManager(contextManager)) {
+    contextManager.disable();
+  }
+}
+
 export function createTracing(options: TracingOptions = {}): TracingHandle {
   const tracerName = options.tracerName ?? DEFAULT_TRACER_NAME;
 
   try {
+    ensureAsyncContextPropagation();
     const exporter = new GuardedSpanExporter(
       options.exporter ?? new ConsoleSpanExporter(),
       options.onError,

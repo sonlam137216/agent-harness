@@ -79,61 +79,75 @@ Start with one immutable definition. Add an `Agent` runtime object or builder on
 
 ## Model
 
-- [ ] `Sampler` interface
-- [ ] shared sampling types
-- [ ] one provider implementation
-- [ ] text response normalization
-- [ ] tool-call response normalization
-- [ ] token usage extraction
-- [ ] stop reason normalization
+- [x] `Sampler` interface
+- [x] shared provider-neutral sampling types
+- [x] cancellation/deadline propagation contract
+- [x] normalized sampling failure contract
+- [x] one provider implementation (`OpenAIResponsesSampler`)
+- [x] text response normalization
+- [x] tool-call response normalization
+- [x] token usage extraction
+- [x] stop reason normalization
 
 ## Session
 
-- [ ] `Session`
-- [ ] `Turn`
+- [x] `Session`
+- [x] `Turn`
 - [ ] `ChatState`
-- [ ] in-memory session store
+- [x] `SessionStore` port
+- [x] `InMemorySessionStore`
 
 ## Runtime
 
-- [ ] `SessionActor`
-- [ ] `AgentLoop`
-- [ ] model/tool loop
-- [ ] max-iteration safety limit
-- [ ] cancellation path
+- [x] minimal synchronous `SessionRuntime`
+- [x] `AgentLoop`
+- [x] model/tool loop
+- [x] max-iteration safety limit
+- [x] cancellation and deadline path through the loop
 - [ ] at most one active turn per session
 
-`SessionActor` is an in-process coordinator in this phase; no actor framework or background queue is required.
+`SessionRuntime` creates or loads session state, creates one user turn, delegates to `AgentLoop`, persists the result, and owns the top-level trace spans. It intentionally has no actor, mailbox, queue, background-processing, or concurrency-management semantics.
+
+## CLI
+
+- [x] one-shot read-only CLI composition root
+- [x] model selection through `AgentDefinition.model.modelId`
+- [x] final answer presentation
+- [x] credential-free full-path smoke test with `FakeSampler`
+
+Interactive sessions, a TUI, permission prompts, and persistent session commands are intentionally outside the Phase 1 CLI.
 
 ## Context
 
-- [ ] minimal `ContextBuilder`
-- [ ] system instructions
-- [ ] conversation messages
-- [ ] native tool definitions
+- [x] minimal `ContextBuilder`
+- [x] system instructions
+- [x] conversation messages
+- [x] native tool definitions
 
 Token budgeting, pluggable context sources, project rules, pruning, and compaction remain in Phase 2.
 
 ## Tools
 
-- [ ] `Tool` interface
-- [ ] `ToolRegistry`
-- [ ] `ToolBridge`
-- [ ] argument validation
-- [ ] result normalization
+- [x] `Tool` interface
+- [x] `ToolRegistry`
+- [x] `ToolBridge`
+- [x] strict input validation in Phase 1 native tools
+- [x] normalized `ToolResult` from Phase 1 native tools
 - [ ] minimal deny-by-default `PermissionPolicy`
 
 ## Workspace
 
-- [ ] `Workspace` interface
-- [ ] `LocalWorkspace`
-- [ ] `read_file`
-- [ ] `list_files`
-- [ ] `grep`
+- [x] narrow read-only `FileSystemCapability`
+- [x] local filesystem adapter
+- [x] read-only workspace composition in the CLI root
+- [x] `read_file`
+- [x] `list_files`
+- [x] `search_text`
 - [ ] `write_file` or `apply_patch`
 - [ ] `run_command`
-- [ ] workspace-root and path-containment enforcement
-- [ ] cancellation and timeout propagation
+- [x] filesystem-root and path-containment enforcement
+- [ ] cancellation and timeout propagation across the complete runtime
+- [x] bounded filesystem reads and directory listings
 - [ ] command output limits
 - [ ] environment filtering
 
@@ -141,44 +155,40 @@ Every write or command execution must receive an explicit permission decision. T
 
 ## Failure behavior
 
-- [ ] normalized errors retain cause, category, and retryability
-- [ ] provider transport retries remain inside the provider adapter
+- [x] normalized provider errors retain a sanitized cause, category, and retryability
+- [x] provider transport retries remain inside the provider adapter
 - [ ] mutating tools are not retried automatically
 - [ ] cancellation reaches active model and workspace operations
 
 ## Observability
 
-- [ ] session span
-- [ ] turn span
-- [ ] model span
-- [ ] tool span
-- [ ] token usage attributes
-- [ ] latency attributes
+- [x] session span
+- [x] turn span
+- [x] model span
+- [x] tool span
+- [x] model token usage attributes
+- [x] model and loop latency attributes
 
 ## Tests
 
-- [ ] agent loop stop/continue and max-iteration behavior
-- [ ] provider response normalization
-- [ ] tool validation and dispatch
+- [x] agent loop stop/continue and max-iteration behavior
+- [x] provider response normalization
+- [x] tool validation and dispatch
 - [ ] minimal permission decisions
-- [ ] workspace path boundaries
-- [ ] cancellation and retry ownership
+- [x] workspace path boundaries
+- [x] AgentLoop cancellation and no-retry ownership
 
 Exit criteria:
 
 ```text
 User prompt
 → model
-→ read file
-→ model
-→ modify file
-→ model
-→ run command
+→ read-only workspace tool
 → model
 → final answer
 ```
 
-is possible and fully traceable.
+is possible from the CLI and fully traceable. Mutating files and running commands remain unavailable until their permission and workspace slices are implemented.
 
 ---
 
@@ -496,7 +506,7 @@ can use the same harness runtime.
 Avoid implementing these in Phase 1:
 
 - distributed queues
-- actor frameworks or background mailboxes for the initial `SessionActor`
+- actor frameworks or background mailboxes around `SessionRuntime`
 - recursive multi-agent graphs
 - vector databases
 - elaborate plugin marketplaces

@@ -21,7 +21,7 @@ If code and documentation disagree, stop and update the architecture intentional
 
 The repository is in **Phase 1 — Core Harness**.
 
-Implement Phase 1 one roadmap capability at a time. The `AgentDefinition` slice is complete; do not begin another slice until explicitly requested.
+Implement Phase 1 one roadmap capability at a time. The `AgentDefinition`, minimal `Session`/`InMemorySessionStore`, provider-neutral `Sampler`, OpenAI Responses sampler adapter, minimal `ContextBuilder`, tool contract/registry foundation, read-only local filesystem capability, native `read_file`/`list_files`/`search_text`, minimal read-only `ToolBridge`, minimal `AgentLoop`, minimal `SessionRuntime`, and read-only Phase 1 CLI slices are complete; do not begin another slice until explicitly requested.
 
 Do not implement advanced capabilities before the core end-to-end loop works.
 
@@ -40,8 +40,9 @@ Unless explicitly requested, do not implement:
 
 ### Runtime
 
-- `SessionActor` owns orchestration for one session.
-- Initially, `SessionActor` is an in-process coordinator that permits at most one active turn per session. The name does not require an actor framework or distributed mailbox.
+- `SessionRuntime` owns session-level orchestration around one synchronous `AgentLoop` run.
+- `SessionRuntime` creates or loads session state, creates one turn, and persists the turn before and after loop execution.
+- Concurrency control, queues, background work, actor semantics, and mailboxes are not part of the Phase 1 `SessionRuntime`.
 - `AgentLoop` owns the model → tool → model iteration.
 - `Turn` is session state; Runtime coordinates it but does not define a second turn model.
 - Runtime code must not directly access the filesystem, shell, Git, or model-provider SDKs.

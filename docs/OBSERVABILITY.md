@@ -102,17 +102,25 @@ Do not emit spans for capabilities that do not exist yet. The following names be
 
 ### `session.run`
 
+Phase 1 emits one span for each synchronous `SessionRuntime.run` call. The current implementation records only attributes already owned by the runtime slice.
+
 Useful attributes:
 
 ```text
 session.id
 agent.name
 model.default
+session.created
+session.outcome
+success
+duration_ms
 workspace.type
 permission.mode
 ```
 
 ### `turn.run`
+
+Phase 1 nests one turn span under `session.run`. `turn.index` is zero-based.
 
 ```text
 session.id
@@ -120,13 +128,31 @@ turn.id
 turn.index
 loop.iterations
 turn.outcome
+success
+duration_ms
+```
+
+### `agent.loop.iteration`
+
+Phase 1 records one span per model/tool iteration:
+
+```text
+session.id
+turn.id
+loop.iteration
+loop.outcome
+duration_ms
 ```
 
 ### `context.build`
 
-Phase 1 records total, system, conversation, and tool contributions. Phase 2 adds budgeting, rules, compaction, and other source-specific attributes.
+Phase 1 records structural message and tool counts. Phase 2 adds token budgeting, rules, compaction, and other source-specific attributes.
 
 ```text
+context.message_count
+context.system_message_count
+context.conversation_message_count
+context.tool_count
 context.window_limit
 context.total_tokens
 context.system_tokens
@@ -142,6 +168,10 @@ context.compaction_applied
 ### `model.sample`
 
 ```text
+session.id
+turn.id
+model_call.id
+loop.iteration
 provider
 model
 input_tokens
@@ -151,16 +181,21 @@ reasoning_tokens
 latency_ms
 stop_reason
 retry_count
+success
 ```
 
-Do not record complete prompts by default.
+AgentLoop owns the canonical `model.sample` span and records runtime correlation, model, latency, normalized usage, stop reason, and outcome. `OpenAIResponsesSampler` enriches that active span with `provider = openai`, `retry_count`, and the provider request ID when returned; it does not create a duplicate model span. Do not record API keys, authorization headers, complete prompts, tool arguments, raw response bodies, or raw model failures by default.
 
 ### `tool.execute`
 
 ```text
+session.id
+turn.id
 tool.name
 tool.kind
 tool_call.id
+tool.access_kind
+tool.result_outcome
 permission.decision
 success
 duration_ms
@@ -168,7 +203,7 @@ input_size_bytes
 output_size_bytes
 ```
 
-Do not store sensitive tool arguments by default.
+Phase 1 records correlation, native/read-only classification, outcome, and duration. Input/output sizes and permission decisions are added with their owning capabilities. Do not store sensitive tool arguments, outputs, or raw unexpected exception messages by default.
 
 ### `workspace.operation`
 
@@ -177,9 +212,11 @@ workspace.type
 operation
 duration_ms
 success
+filesystem.bytes_read
+filesystem.entry_count
 ```
 
-For commands, record sanitized metadata rather than blindly storing full environment or secrets.
+Filesystem paths and contents are not recorded by default. For commands, record sanitized metadata rather than blindly storing full environment or secrets.
 
 ### `mcp.search`
 
@@ -408,6 +445,8 @@ other OTLP backends
 
 Instrumentation should use the OpenTelemetry API. Provider setup and exporter selection stay in one Observability module; do not add a second harness-specific tracer abstraction in Phase 0.
 
+The Node.js tracing setup installs the standard async context manager once so nested runtime operations preserve their parent-child trace relationships.
+
 ---
 
 ## 10. Phase 0 and Phase 1 Minimum
@@ -441,5 +480,7 @@ model.sample span
 tool.execute span
 workspace.operation span
 ```
+
+The Phase 1 CLI uses this existing hierarchy and adds no presentation-specific span. Its real-provider entry point uses the console exporter, while the credential-free smoke path injects an in-memory exporter and verifies the same session → model → tool → workspace hierarchy. Final answer text is presentation output, not a trace attribute.
 
 Tracing initialization and exporter failures must be contained, with a no-op fallback when setup cannot complete. Phase 1 verifies that observability failures do not alter real turn outcomes. If this foundation is present from the start, later MCP, retrieval, memory, subagents, and compaction can attach naturally to the same trace tree.
