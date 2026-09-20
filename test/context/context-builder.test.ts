@@ -35,6 +35,7 @@ describe('ContextBuilder', () => {
     const builder = new ContextBuilder(tracing.tracer);
     const toolCallId = createToolCallId();
     const modelCallId = createModelCallId();
+    const turnId = createTurnId();
     const session: Session = {
       id: createSessionId(),
       turns: [
@@ -60,18 +61,19 @@ describe('ContextBuilder', () => {
           ],
         },
         {
-          id: createTurnId(),
+          id: turnId,
           status: 'in_progress',
           entries: [{ kind: 'user_message', content: 'What is its name?' }],
         },
       ],
     };
 
-    const request = builder.build({ agent, session, modelCallId, tools: [tool] });
+    const { request } = await builder.build({ agent, session, turnId, modelCallId, tools: [tool] });
 
     expect(request).toEqual({
       modelCallId,
       modelId: 'test-model',
+      maxOutputTokens: 4096,
       messages: [
         { role: 'system', content: 'Follow the test instructions.' },
         { role: 'user', content: 'Read package.json.' },
@@ -107,16 +109,18 @@ describe('ContextBuilder', () => {
         },
       ],
     };
+    const turnId = session.turns[0]!.id;
     const modelCallId = createModelCallId();
 
-    builder.build({ agent, session, modelCallId, tools: [tool] });
+    await builder.build({ agent, session, turnId, modelCallId, tools: [tool] });
     await tracing.forceFlush();
 
     const spans = exporter.getFinishedSpans();
     expect(spans).toHaveLength(1);
     expect(spans[0]?.name).toBe('context.build');
-    expect(spans[0]?.attributes).toEqual({
+    expect(spans[0]?.attributes).toMatchObject({
       'session.id': session.id,
+      'turn.id': turnId,
       'model_call.id': modelCallId,
       'context.message_count': 2,
       'context.system_message_count': 1,

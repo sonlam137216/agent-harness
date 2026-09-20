@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { OpenAIResponsesSampler } from '../model/providers/openai-responses-sampler.js';
+import { createSampler, SamplerConfigurationError } from '../model/create-sampler.js';
+import { ContextError } from '../context/context-budget.js';
 import { SamplingError } from '../model/sampling-types.js';
 import { createTracing, type TracingHandle } from '../observability/tracing.js';
 import {
@@ -13,8 +14,10 @@ import {
 
 function safeErrorMessage(error: unknown): string {
   if (
+    error instanceof ContextError ||
     error instanceof CliUsageError ||
     error instanceof CliRunError ||
+    error instanceof SamplerConfigurationError ||
     error instanceof SamplingError
   ) {
     return error.message;
@@ -34,16 +37,11 @@ async function main(): Promise<void> {
       return;
     }
 
-    const apiKey = process.env.OPENAI_API_KEY?.trim();
-    if (apiKey === undefined || apiKey.length === 0) {
-      throw new CliUsageError('Set OPENAI_API_KEY to use the OpenAI sampler.');
-    }
-
     tracing = createTracing();
     process.once('SIGINT', cancel);
     await runPhaseOneCli({
       ...parsed.config,
-      sampler: new OpenAIResponsesSampler({ apiKey }),
+      sampler: createSampler({ provider: parsed.provider, environment: process.env }),
       tracer: tracing.tracer,
       signal: cancellation.signal,
       writeOutput: (text) => process.stdout.write(`${text}\n`),

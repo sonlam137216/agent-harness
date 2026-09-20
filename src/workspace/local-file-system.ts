@@ -1,6 +1,8 @@
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { open, opendir, realpath } from 'node:fs/promises';
 
+import { SpanStatusCode } from '@opentelemetry/api';
+
 import type { TracingHandle } from '../observability/tracing.js';
 import {
   FileSystemError,
@@ -222,7 +224,11 @@ export class LocalFileSystemCapability implements FileSystemCapability {
     }
   }
 
-  #normalizeError(error: unknown, requestedPath: string, signal: AbortSignal | undefined): Error {
+  #normalizeError(
+    error: unknown,
+    requestedPath: string,
+    signal: AbortSignal | undefined,
+  ): FileSystemError {
     if (error instanceof FileSystemError) return error;
     if (signal?.aborted === true) {
       return new FileSystemError('The filesystem operation was cancelled.', {
@@ -281,8 +287,8 @@ export class LocalFileSystemCapability implements FileSystemCapability {
         return result;
       } catch (error) {
         const normalized = this.#normalizeError(error, requestedPath, signal);
-        span.setAttribute('success', false);
-        span.recordException(normalized);
+        span.setAttributes({ success: false, 'error.type': normalized.code });
+        span.setStatus({ code: SpanStatusCode.ERROR });
         throw normalized;
       } finally {
         span.setAttribute('duration_ms', performance.now() - startedAt);

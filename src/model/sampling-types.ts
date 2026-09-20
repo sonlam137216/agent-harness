@@ -37,6 +37,8 @@ export interface ModelRequest {
   readonly modelId: string;
   readonly messages: readonly ModelMessage[];
   readonly tools: readonly ModelToolDefinition[];
+  /** Context-selected output allowance; provider-specific mapping stays in adapters. */
+  readonly maxOutputTokens?: number;
 }
 
 export interface TokenUsage {
@@ -44,6 +46,16 @@ export interface TokenUsage {
   readonly outputTokens: number;
   readonly cachedInputTokens?: number;
   readonly reasoningTokens?: number;
+}
+
+export function validateOutputTokenLimit(request: ModelRequest): void {
+  const value = request.maxOutputTokens;
+  if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+    throw new SamplingError('maxOutputTokens must be a positive safe integer.', {
+      code: 'invalid_request',
+      retryable: false,
+    });
+  }
 }
 
 export type StopReason =

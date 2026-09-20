@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { SpanStatusCode } from '@opentelemetry/api';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -86,6 +87,19 @@ describe('LocalFileSystemCapability', () => {
       code: 'not_found',
       requestedPath: 'missing',
     });
+    await tracing.forceFlush();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans).toHaveLength(2);
+    for (const span of spans) {
+      expect(span.attributes).toEqual(
+        expect.objectContaining({ success: false, 'error.type': 'not_found' }),
+      );
+      expect(span.status.code).toBe(SpanStatusCode.ERROR);
+      expect(span.events).toEqual([]);
+    }
+    expect(JSON.stringify(spans.map((span) => span.attributes))).not.toContain('missing');
+    expect(JSON.stringify(spans.map((span) => span.events))).not.toContain(workspaceRoot);
   });
 
   it('rejects lexical, absolute, and symlink escapes outside the workspace root', async () => {

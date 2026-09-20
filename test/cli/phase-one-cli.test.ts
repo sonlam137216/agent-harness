@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
+import { InMemorySpanExporter, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -76,6 +76,7 @@ describe('Phase 1 CLI', () => {
       ),
     ).toEqual({
       help: false,
+      provider: 'openai',
       config: {
         modelId: 'flag-model',
         workspaceRoot: '/workspace/repo',
@@ -86,21 +87,68 @@ describe('Phase 1 CLI', () => {
 
   it('uses the model environment fallback and rejects incomplete invocations', () => {
     expect(
-      parsePhaseOneCliArguments(['answer'], { AGENT_HARNESS_MODEL: 'env-model' }, '/workspace'),
+      parsePhaseOneCliArguments(
+        ['answer'],
+        { AGENT_HARNESS_MODEL: 'env-model', AGENT_HARNESS_PROVIDER: 'ollama' },
+        '/workspace',
+      ),
     ).toEqual({
       help: false,
+      provider: 'ollama',
       config: { modelId: 'env-model', workspaceRoot: '/workspace', prompt: 'answer' },
     });
     expect(() => parsePhaseOneCliArguments(['answer'], {}, '/workspace')).toThrow(CliUsageError);
     expect(() => parsePhaseOneCliArguments(['--model', 'model-only'], {}, '/workspace')).toThrow(
       'Provide a non-empty user prompt.',
     );
+    expect(() =>
+      parsePhaseOneCliArguments(
+        ['--provider', 'unknown', '--model', 'model', 'answer'],
+        {},
+        '/workspace',
+      ),
+    ).toThrow('Unknown provider');
+  });
+
+  it('accepts explicit context budgets and rule scope and rejects invalid settings', () => {
+    const parsed = parsePhaseOneCliArguments(
+      [
+        '--model',
+        'test',
+        '--context-window',
+        '8000',
+        '--output-reserve',
+        '1000',
+        '--rules-directory',
+        'src/feature',
+        'Inspect',
+      ],
+      {},
+      '/workspace',
+    );
+    expect(parsed).toMatchObject({
+      config: {
+        contextBudget: { windowTokens: 8000, outputReserveTokens: 1000 },
+        rulesDirectory: 'src/feature',
+      },
+    });
+    for (const args of [
+      ['--context-window', '3000'],
+      ['--output-reserve', '0'],
+      ['--context-window', '1.5'],
+      ['--rules-directory', '../outside'],
+    ]) {
+      expect(() =>
+        parsePhaseOneCliArguments(['--model', 'test', ...args, 'Inspect'], {}, '/workspace'),
+      ).toThrow(CliUsageError);
+    }
   });
 
   it('runs the complete read-only harness with a FakeSampler and no external credentials', async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), 'agent-harness-cli-'));
     temporaryDirectories.push(workspaceRoot);
     await writeFile(join(workspaceRoot, 'fixture.txt'), 'phase-one fixture\n', 'utf8');
+    await writeFile(join(workspaceRoot, 'AGENTS.md'), 'Use fixture evidence in your answer.');
 
     const exporter = new InMemorySpanExporter();
     const tracing = createTracing({ exporter });
@@ -126,6 +174,12 @@ describe('Phase 1 CLI', () => {
     expect(writeOutput).toHaveBeenCalledOnce();
     expect(writeOutput).toHaveBeenCalledWith('fixture.txt contains “phase-one fixture”.');
     expect(sampler.requests).toHaveLength(2);
+    expect(sampler.requests[0]?.maxOutputTokens).toBe(4096);
+    expect(
+      sampler.requests[0]?.messages.some(
+        (message) => message.role === 'system' && message.content.includes('Use fixture evidence'),
+      ),
+    ).toBe(true);
     expect(sampler.requests[0]?.tools.map((tool) => tool.name)).toEqual([
       'read_file',
       'list_files',
@@ -144,5 +198,39 @@ describe('Phase 1 CLI', () => {
         'workspace.operation',
       ]),
     );
+  });
+
+  it('completes the full read-only harness when trace export fails', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'agent-harness-cli-'));
+    temporaryDirectories.push(workspaceRoot);
+    await writeFile(join(workspaceRoot, 'fixture.txt'), 'phase-one fixture\n', 'utf8');
+
+    const failures: unknown[] = [];
+    const exporter: SpanExporter = {
+      export: () => {
+        throw new Error('trace export failed');
+      },
+      shutdown: () => Promise.resolve(),
+    };
+    const tracing = createTracing({ exporter, onError: (error) => failures.push(error) });
+    tracingHandles.push(tracing);
+    const writeOutput = vi.fn<(text: string) => void>();
+
+    const result = await runPhaseOneCli({
+      modelId: 'fake-model',
+      prompt: 'Read fixture.txt and report its contents.',
+      workspaceRoot,
+      sampler: new ReadThenAnswerFakeSampler(),
+      tracer: tracing.tracer,
+      writeOutput,
+    });
+    await tracing.forceFlush();
+
+    expect(result).toMatchObject({
+      outcome: 'completed',
+      finalText: 'fixture.txt contains “phase-one fixture”.',
+    });
+    expect(writeOutput).toHaveBeenCalledWith('fixture.txt contains “phase-one fixture”.');
+    expect(failures.length).toBeGreaterThan(0);
   });
 });

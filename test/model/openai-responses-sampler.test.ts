@@ -69,6 +69,22 @@ function errorResponse(
 }
 
 describe('OpenAIResponsesSampler', () => {
+  it('maps Context output limits and rejects invalid limits before transport', async () => {
+    const fetch = vi.fn<FetchTransport>(() => Promise.resolve(successResponse()));
+    const sampler = new OpenAIResponsesSampler({ apiKey: 'test-key', fetch });
+    await sampler.sample(request({ maxOutputTokens: 123 }));
+    const body = fetch.mock.calls[0]?.[1]?.body;
+    if (typeof body !== 'string') throw new TypeError('Expected request body.');
+    expect(JSON.parse(body)).toMatchObject({ max_output_tokens: 123 });
+    for (const maxOutputTokens of [0, -1, 1.5, NaN, Infinity]) {
+      await expect(sampler.sample(request({ maxOutputTokens }))).rejects.toMatchObject({
+        code: 'invalid_request',
+        retryable: false,
+      });
+    }
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('maps provider-neutral messages and tools to a Responses request', async () => {
     const toolCallId = createToolCallId();
     const modelRequest = request({

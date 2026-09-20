@@ -1,3 +1,5 @@
+import { SpanStatusCode } from '@opentelemetry/api';
+
 import type { AgentDefinition } from '../agent/agent-definition.js';
 import { createSessionId, createTurnId, type SessionId, type TurnId } from '../ids.js';
 import type { ModelToolDefinition } from '../model/sampling-types.js';
@@ -5,7 +7,7 @@ import type { TracingHandle } from '../observability/tracing.js';
 import type { SessionStore } from '../session/session-store.js';
 import type { Session } from '../session/session.js';
 import type { TurnStatus } from '../session/turn.js';
-import type { AgentLoop, AgentLoopResult } from './agent-loop.js';
+import { AgentLoopExecutionError, type AgentLoop, type AgentLoopResult } from './agent-loop.js';
 
 export interface SessionRuntimeOptions {
   readonly sessionStore: SessionStore;
@@ -91,9 +93,13 @@ export class SessionRuntime {
           'session.outcome': result.outcome,
           success: result.outcome === 'completed',
         });
+        if (result.outcome !== 'completed') {
+          sessionSpan.setStatus({ code: SpanStatusCode.ERROR });
+        }
         return result;
       } catch (error) {
         sessionSpan.setAttributes({ 'session.outcome': 'error', success: false });
+        sessionSpan.setStatus({ code: SpanStatusCode.ERROR });
         throw error;
       } finally {
         sessionSpan.setAttribute('duration_ms', performance.now() - startedAt);
@@ -138,6 +144,12 @@ export class SessionRuntime {
             ...(input.deadlineMs === undefined ? {} : { deadlineMs: input.deadlineMs }),
           });
         } catch (error) {
+          if (error instanceof AgentLoopExecutionError) {
+            await this.#sessionStore.save(error.latestSession);
+            turnSpan.setAttribute('loop.iterations', error.iterations);
+            throw error.cause;
+          }
+
           await this.#sessionStore.save(setTurnStatus(activeSession, turnId, 'failed'));
           throw error;
         }
@@ -148,9 +160,13 @@ export class SessionRuntime {
           'turn.outcome': loopResult.outcome,
           success: loopResult.outcome === 'completed',
         });
+        if (loopResult.outcome !== 'completed') {
+          turnSpan.setStatus({ code: SpanStatusCode.ERROR });
+        }
         return { ...loopResult, turnId };
       } catch (error) {
         turnSpan.setAttributes({ 'turn.outcome': 'error', success: false });
+        turnSpan.setStatus({ code: SpanStatusCode.ERROR });
         throw error;
       } finally {
         turnSpan.setAttribute('duration_ms', performance.now() - startedAt);

@@ -19,9 +19,11 @@ If code and documentation disagree, stop and update the architecture intentional
 
 ## Current Phase
 
-The repository is in **Phase 1 — Core Harness**.
+The repository has completed **Phase 2 — Context Engine**.
 
-Implement Phase 1 one roadmap capability at a time. The `AgentDefinition`, minimal `Session`/`InMemorySessionStore`, provider-neutral `Sampler`, OpenAI Responses sampler adapter, minimal `ContextBuilder`, tool contract/registry foundation, read-only local filesystem capability, native `read_file`/`list_files`/`search_text`, minimal read-only `ToolBridge`, minimal `AgentLoop`, minimal `SessionRuntime`, and read-only Phase 1 CLI slices are complete; do not begin another slice until explicitly requested.
+Phase 1 core and its read-only CLI are complete, including OpenAI Responses, Anthropic Messages, and Ollama Chat adapters. Phase 2 adds budget-aware context sources, scoped project rules, historical tool-result pruning, and model-assisted compaction with in-memory checkpoints. See `docs/CONTEXT-ENGINE.md` for the current contract and limits.
+
+Implement one roadmap capability at a time. Do not start Phase 3 or another capability until explicitly requested. File mutation, command execution, durable sessions, hooks, and events remain unavailable.
 
 Do not implement advanced capabilities before the core end-to-end loop works.
 

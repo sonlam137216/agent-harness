@@ -1,3 +1,4 @@
+import { SpanStatusCode } from '@opentelemetry/api';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,7 +13,7 @@ import {
   type SamplingOptions,
 } from '../../src/model/sampling-types.js';
 import { createTracing, type TracingHandle } from '../../src/observability/tracing.js';
-import { AgentLoop } from '../../src/runtime/agent-loop.js';
+import { AgentLoop, AgentLoopExecutionError } from '../../src/runtime/agent-loop.js';
 import type { Session } from '../../src/session/session.js';
 import type { Turn } from '../../src/session/turn.js';
 import { ReadFileTool } from '../../src/tools/builtin/read-file.tool.js';
@@ -178,6 +179,66 @@ describe('AgentLoop', () => {
     expect(JSON.stringify(spans.map((span) => span.attributes))).not.toContain(
       'Inspect the workspace.',
     );
+  });
+
+  it.each(['max_output_tokens', 'content_filtered', 'unknown', 'tool_calls'] as const)(
+    'does not treat partial text with stop reason %s as a completed answer',
+    async (stopReason) => {
+      const sampler = new FakeSampler([
+        (request) => response(request, { text: 'Partial text.', toolCalls: [], stopReason }),
+      ]);
+      const { session, turnId } = createActiveSession();
+
+      const result = await createLoop(sampler).run({ agent, session, turnId, tools: [] });
+      await tracing.forceFlush();
+
+      expect(result).toMatchObject({ outcome: 'failed', iterations: 1, finalText: null });
+      expect(getTurn(result.session, turnId)).toMatchObject({
+        status: 'failed',
+        entries: [
+          { kind: 'user_message' },
+          { kind: 'assistant_message', content: 'Partial text.', toolCalls: [] },
+        ],
+      });
+      const iterationSpan = exporter
+        .getFinishedSpans()
+        .find((span) => span.name === 'agent.loop.iteration');
+      expect(iterationSpan?.status.code).toBe(SpanStatusCode.ERROR);
+    },
+  );
+
+  it('does not execute tool calls whose normalized stop reason is inconsistent', async () => {
+    const execute = vi.fn<Tool['execute']>();
+    registry.register({
+      definition: {
+        name: 'inconsistent_read',
+        description: 'Must not run for an inconsistent response.',
+        inputSchema: { type: 'object', additionalProperties: false },
+        accessKind: 'read',
+      },
+      validateInput: () => ({ valid: true }),
+      execute,
+    });
+    const sampler = new FakeSampler([
+      (request) =>
+        response(request, {
+          text: 'Unexpected final text.',
+          toolCalls: [{ id: createToolCallId(), name: 'inconsistent_read', arguments: {} }],
+          stopReason: 'end_turn',
+        }),
+    ]);
+    const { session, turnId } = createActiveSession();
+
+    const result = await createLoop(sampler).run({
+      agent,
+      session,
+      turnId,
+      tools: registry.getModelDefinitions(),
+    });
+
+    expect(result).toMatchObject({ outcome: 'failed', finalText: null });
+    expect(getTurn(result.session, turnId).status).toBe('failed');
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('executes read_file, includes its normalized result in the next request, then stops', async () => {
@@ -367,11 +428,28 @@ describe('AgentLoop', () => {
     const sampler = new FakeSampler([() => Promise.reject(samplingError)]);
     const { session, turnId } = createActiveSession();
 
-    await expect(createLoop(sampler).run({ agent, session, turnId, tools: [] })).rejects.toBe(
-      samplingError,
+    const failure = await createLoop(sampler)
+      .run({ agent, session, turnId, tools: [] })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AgentLoopExecutionError);
+    expect(failure).toMatchObject({ cause: samplingError, iterations: 1 });
+    expect(getTurn((failure as AgentLoopExecutionError).latestSession, turnId).status).toBe(
+      'failed',
     );
     expect(sampler.requests).toHaveLength(1);
     expect(getTurn(session, turnId).status).toBe('in_progress');
+
+    await tracing.forceFlush();
+    const modelSpan = exporter.getFinishedSpans().find((span) => span.name === 'model.sample');
+    expect(modelSpan?.attributes).toEqual(
+      expect.objectContaining({
+        success: false,
+        'error.type': 'unavailable',
+        'sampling.retryable': true,
+      }),
+    );
+    expect(modelSpan?.status.code).toBe(SpanStatusCode.ERROR);
   });
 
   it('honors an already-cancelled signal before sampling', async () => {

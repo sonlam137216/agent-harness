@@ -1,3 +1,5 @@
+import { SpanStatusCode } from '@opentelemetry/api';
+
 import type { AgentDefinition } from '../agent/agent-definition.js';
 import type { ContextBuilder } from '../context/context-builder.js';
 import { createModelCallId, type TurnId } from '../ids.js';
@@ -58,6 +60,18 @@ interface IterationResult {
 
 export class AgentLoopStateError extends Error {
   public override readonly name = 'AgentLoopStateError';
+}
+
+export class AgentLoopExecutionError extends Error {
+  public override readonly name = 'AgentLoopExecutionError';
+
+  public constructor(
+    public readonly latestSession: Session,
+    public readonly iterations: number,
+    cause: unknown,
+  ) {
+    super('Agent loop execution failed.', { cause });
+  }
 }
 
 function findTurn(session: Session, turnId: TurnId): Turn {
@@ -182,14 +196,18 @@ export class AgentLoop {
 
             try {
               const modelCallId = createModelCallId();
-              const request = this.#contextBuilder.build({
+              const context = await this.#contextBuilder.build({
                 agent: input.agent,
                 session,
+                turnId: input.turnId,
                 modelCallId,
                 tools: input.tools,
+                ...(cancellation.signal === undefined ? {} : { signal: cancellation.signal }),
+                ...(input.deadlineMs === undefined ? {} : { deadlineMs: input.deadlineMs }),
               });
+              session = context.session;
               const response = await this.#sample(
-                request,
+                context.request,
                 session.id,
                 input.turnId,
                 iteration,
@@ -203,7 +221,7 @@ export class AgentLoop {
                 );
               }
 
-              let updatedSession = appendEntries(session, input.turnId, [
+              session = appendEntries(session, input.turnId, [
                 {
                   kind: 'assistant_message',
                   modelCallId: response.modelCallId,
@@ -213,12 +231,25 @@ export class AgentLoop {
               ]);
 
               if (response.toolCalls.length === 0) {
-                const outcome = response.text === null ? 'failed' : 'completed';
+                const completed = response.stopReason === 'end_turn' && response.text !== null;
+                const outcome = completed ? 'completed' : 'failed';
+                const finalText = completed ? response.text : null;
                 span.setAttribute('loop.outcome', outcome);
+                if (!completed) span.setStatus({ code: SpanStatusCode.ERROR });
                 return {
-                  session: setTurnStatus(updatedSession, input.turnId, outcome),
+                  session: setTurnStatus(session, input.turnId, outcome),
                   outcome,
-                  finalText: response.text,
+                  finalText,
+                } satisfies IterationResult;
+              }
+
+              if (response.stopReason !== 'tool_calls') {
+                span.setAttribute('loop.outcome', 'failed');
+                span.setStatus({ code: SpanStatusCode.ERROR });
+                return {
+                  session: setTurnStatus(session, input.turnId, 'failed'),
+                  outcome: 'failed',
+                  finalText: null,
                 } satisfies IterationResult;
               }
 
@@ -226,21 +257,23 @@ export class AgentLoop {
                 const toolResult = await this.#toolBridge.execute(toolCall, {
                   sessionId: session.id,
                   turnId: input.turnId,
+                  modelCallId,
                   ...(cancellation.signal === undefined ? {} : { signal: cancellation.signal }),
                 });
-                updatedSession = appendEntries(updatedSession, input.turnId, [
+                session = appendEntries(session, input.turnId, [
                   { kind: 'tool_result', ...toolResult },
                 ]);
               }
 
               span.setAttribute('loop.outcome', 'continue');
               return {
-                session: updatedSession,
+                session,
                 outcome: 'continue',
                 finalText: null,
               } satisfies IterationResult;
             } catch (error) {
               span.setAttribute('loop.outcome', 'error');
+              span.setStatus({ code: SpanStatusCode.ERROR });
               throw error;
             } finally {
               span.setAttribute('duration_ms', performance.now() - startedAt);
@@ -287,7 +320,11 @@ export class AgentLoop {
         };
       }
 
-      throw error;
+      throw new AgentLoopExecutionError(
+        setTurnStatus(session, input.turnId, 'failed'),
+        iterations,
+        error,
+      );
     } finally {
       cancellation.dispose();
     }
@@ -347,6 +384,13 @@ export class AgentLoop {
         return response;
       } catch (error) {
         span.setAttribute('success', false);
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        if (error instanceof SamplingError) {
+          span.setAttributes({
+            'error.type': error.code,
+            'sampling.retryable': error.retryable,
+          });
+        }
         throw error;
       } finally {
         span.setAttribute('latency_ms', performance.now() - startedAt);

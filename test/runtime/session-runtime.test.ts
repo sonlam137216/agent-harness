@@ -1,3 +1,4 @@
+import { SpanStatusCode } from '@opentelemetry/api';
 import { InMemorySpanExporter, type ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -168,6 +169,13 @@ describe('SessionRuntime', () => {
     expectChildSpan(iterationSpan, turnSpan);
     expectChildSpan(contextSpan, iterationSpan);
     expectChildSpan(modelSpan, iterationSpan);
+    expect(contextSpan.attributes).toEqual(
+      expect.objectContaining({
+        'session.id': result.session.id,
+        'turn.id': result.turnId,
+        'model_call.id': modelSpan.attributes['model_call.id'],
+      }),
+    );
     expect(JSON.stringify(spans.map((span) => span.attributes))).not.toContain(
       'Finish this request.',
     );
@@ -296,6 +304,77 @@ describe('SessionRuntime', () => {
     const stored = await store.get(sessionId as Session['id']);
     expect(stored?.turns[0]?.status).toBe('failed');
     expect(sampler.requests).toHaveLength(1);
+  });
+
+  it('persists the latest transcript when a later model iteration fails', async () => {
+    const readFile = vi.fn<FileSystemCapability['readFile']>((path) =>
+      Promise.resolve({ path, content: 'preserved workspace data', sizeBytes: 24 }),
+    );
+    registry.register(
+      new ReadFileTool({
+        readFile,
+        listDirectory: vi.fn<FileSystemCapability['listDirectory']>(() => Promise.resolve([])),
+      }),
+    );
+    const toolCallId = createToolCallId();
+    const samplingError = new SamplingError('Sampling failed.', {
+      code: 'unavailable',
+      retryable: true,
+    });
+    const sampler = new FakeSampler([
+      (request) =>
+        response(request, {
+          text: null,
+          toolCalls: [{ id: toolCallId, name: 'read_file', arguments: { path: 'notes.txt' } }],
+          stopReason: 'tool_calls',
+        }),
+      () => Promise.reject(samplingError),
+    ]);
+
+    await expect(
+      createRuntime(sampler).run({
+        agent,
+        prompt: 'Read notes.txt.',
+        tools: registry.getModelDefinitions(),
+      }),
+    ).rejects.toBe(samplingError);
+    await tracing.forceFlush();
+
+    const spans = exporter.getFinishedSpans();
+    const sessionSpan = findSpan(spans, 'session.run');
+    const sessionId = sessionSpan.attributes['session.id'];
+    if (typeof sessionId !== 'string') throw new Error('Expected a session ID trace attribute.');
+    const stored = await store.get(sessionId as Session['id']);
+    expect(stored?.turns[0]).toMatchObject({
+      status: 'failed',
+      entries: [
+        { kind: 'user_message', content: 'Read notes.txt.' },
+        { kind: 'assistant_message', content: null, toolCalls: [{ id: toolCallId }] },
+        { kind: 'tool_result', toolCallId, outcome: 'success' },
+      ],
+    });
+
+    const assistantEntry = stored?.turns[0]?.entries[1];
+    if (assistantEntry?.kind !== 'assistant_message') {
+      throw new Error('Expected the persisted assistant tool call.');
+    }
+    const toolSpan = findSpan(spans, 'tool.execute');
+    expect(toolSpan.attributes).toEqual(
+      expect.objectContaining({
+        'turn.id': stored?.turns[0]?.id,
+        'model_call.id': assistantEntry.modelCallId,
+        'tool_call.id': toolCallId,
+      }),
+    );
+    const failedModelSpan = spans.find(
+      (span) => span.name === 'model.sample' && span.attributes.success === false,
+    );
+    expect(failedModelSpan?.attributes).toEqual(
+      expect.objectContaining({ 'error.type': 'unavailable', 'sampling.retryable': true }),
+    );
+    expect(failedModelSpan?.status.code).toBe(SpanStatusCode.ERROR);
+    expect(findSpan(spans, 'turn.run').status.code).toBe(SpanStatusCode.ERROR);
+    expect(sessionSpan.status.code).toBe(SpanStatusCode.ERROR);
   });
 
   it('rejects a missing requested session without creating a turn', async () => {

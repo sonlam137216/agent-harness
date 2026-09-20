@@ -1,13 +1,28 @@
+import { SpanStatusCode } from '@opentelemetry/api';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSessionId, createToolCallId, createTurnId } from '../../src/ids.js';
+import {
+  createModelCallId,
+  createSessionId,
+  createToolCallId,
+  createTurnId,
+} from '../../src/ids.js';
 import { createTracing, type TracingHandle } from '../../src/observability/tracing.js';
 import { ReadFileTool } from '../../src/tools/builtin/read-file.tool.js';
 import { ToolBridge } from '../../src/tools/tool-bridge.js';
 import type { Tool } from '../../src/tools/tool.interface.js';
 import { ToolRegistry } from '../../src/tools/tool-registry.js';
 import type { FileSystemCapability } from '../../src/workspace/filesystem-capability.js';
+
+function executionContext(signal?: AbortSignal) {
+  return {
+    sessionId: createSessionId(),
+    turnId: createTurnId(),
+    modelCallId: createModelCallId(),
+    ...(signal === undefined ? {} : { signal }),
+  };
+}
 
 describe('ToolBridge', () => {
   let exporter: InMemorySpanExporter;
@@ -38,6 +53,7 @@ describe('ToolBridge', () => {
     registry.register(new ReadFileTool(fileSystem));
     const sessionId = createSessionId();
     const turnId = createTurnId();
+    const modelCallId = createModelCallId();
     const toolCallId = createToolCallId();
 
     const result = await bridge.execute(
@@ -46,7 +62,7 @@ describe('ToolBridge', () => {
         name: 'read_file',
         arguments: { path: 'private-file.txt' },
       },
-      { sessionId, turnId, signal: controller.signal },
+      { sessionId, turnId, modelCallId, signal: controller.signal },
     );
     await tracing.forceFlush();
 
@@ -67,6 +83,7 @@ describe('ToolBridge', () => {
       expect.objectContaining({
         'session.id': sessionId,
         'turn.id': turnId,
+        'model_call.id': modelCallId,
         'tool_call.id': toolCallId,
         'tool.name': 'read_file',
         'tool.kind': 'native',
@@ -84,7 +101,7 @@ describe('ToolBridge', () => {
 
     const result = await bridge.execute(
       { id: toolCallId, name: 'missing_tool', arguments: {} },
-      { sessionId: createSessionId(), turnId: createTurnId() },
+      executionContext(),
     );
 
     expect(result).toEqual({
@@ -123,7 +140,7 @@ describe('ToolBridge', () => {
         name: 'strict_read',
         arguments: { path: 42, unexpected: true },
       },
-      { sessionId: createSessionId(), turnId: createTurnId() },
+      executionContext(),
     );
 
     expect(result).toMatchObject({
@@ -150,7 +167,7 @@ describe('ToolBridge', () => {
 
     const result = await bridge.execute(
       { id: createToolCallId(), name: 'failing_read', arguments: {} },
-      { sessionId: createSessionId(), turnId: createTurnId() },
+      executionContext(),
     );
     await tracing.forceFlush();
 
@@ -167,6 +184,9 @@ describe('ToolBridge', () => {
     expect(
       JSON.stringify(exporter.getFinishedSpans().map((span) => span.attributes)),
     ).not.toContain('secret-token');
+    const span = exporter.getFinishedSpans()[0];
+    expect(span?.attributes['error.type']).toBe('tool_execution_error');
+    expect(span?.status.code).toBe(SpanStatusCode.ERROR);
   });
 
   it('returns cancellation before dispatch when the signal is already aborted', async () => {
@@ -186,11 +206,7 @@ describe('ToolBridge', () => {
 
     const result = await bridge.execute(
       { id: createToolCallId(), name: 'cancelled_read', arguments: {} },
-      {
-        sessionId: createSessionId(),
-        turnId: createTurnId(),
-        signal: controller.signal,
-      },
+      executionContext(controller.signal),
     );
 
     expect(result).toMatchObject({
@@ -215,7 +231,7 @@ describe('ToolBridge', () => {
 
     const result = await bridge.execute(
       { id: createToolCallId(), name: 'write_file', arguments: {} },
-      { sessionId: createSessionId(), turnId: createTurnId() },
+      executionContext(),
     );
 
     expect(result).toMatchObject({

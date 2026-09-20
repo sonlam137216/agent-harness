@@ -5,6 +5,7 @@ import type { JsonObject } from '../../json.js';
 import type { Sampler } from '../sampler.interface.js';
 import {
   SamplingError,
+  validateOutputTokenLimit,
   type ModelMessage,
   type ModelRequest,
   type ModelResponse,
@@ -63,6 +64,7 @@ interface OpenAIToolDefinition {
 }
 
 interface OpenAIResponsesRequest {
+  readonly max_output_tokens?: number;
   readonly model: string;
   readonly input: readonly OpenAIInputItem[];
   readonly tools: readonly OpenAIToolDefinition[];
@@ -204,6 +206,9 @@ function mapRequest(request: ModelRequest): OpenAIResponsesRequest {
     })),
     // Session state is owned by the harness rather than provider-side storage.
     store: false,
+    ...(request.maxOutputTokens === undefined
+      ? {}
+      : { max_output_tokens: request.maxOutputTokens }),
   };
 }
 
@@ -495,6 +500,7 @@ export class OpenAIResponsesSampler implements Sampler {
   }
 
   public async sample(request: ModelRequest, options?: SamplingOptions): Promise<ModelResponse> {
+    validateOutputTokenLimit(request);
     const span = trace.getActiveSpan();
     span?.setAttribute('provider', 'openai');
 

@@ -83,7 +83,7 @@ Start with one immutable definition. Add an `Agent` runtime object or builder on
 - [x] shared provider-neutral sampling types
 - [x] cancellation/deadline propagation contract
 - [x] normalized sampling failure contract
-- [x] one provider implementation (`OpenAIResponsesSampler`)
+- [x] OpenAI Responses, Anthropic Messages, and Ollama Chat sampler implementations
 - [x] text response normalization
 - [x] tool-call response normalization
 - [x] token usage extraction
@@ -93,9 +93,10 @@ Start with one immutable definition. Add an `Agent` runtime object or builder on
 
 - [x] `Session`
 - [x] `Turn`
-- [ ] `ChatState`
 - [x] `SessionStore` port
 - [x] `InMemorySessionStore`
+
+No separate `ChatState` is introduced until it has a responsibility distinct from Session's ordered turns.
 
 ## Runtime
 
@@ -104,13 +105,17 @@ Start with one immutable definition. Add an `Agent` runtime object or builder on
 - [x] model/tool loop
 - [x] max-iteration safety limit
 - [x] cancellation and deadline path through the loop
-- [ ] at most one active turn per session
+- [x] normalized stop reasons drive loop completion/failure
+- [x] latest transcript is preserved when a later iteration fails
 
 `SessionRuntime` creates or loads session state, creates one user turn, delegates to `AgentLoop`, persists the result, and owns the top-level trace spans. It intentionally has no actor, mailbox, queue, background-processing, or concurrency-management semantics.
+
+At-most-one-active-turn enforcement is deferred until a concurrent API or interactive runtime exists; it must be added as its own capability rather than hidden inside the Phase 1 synchronous coordinator.
 
 ## CLI
 
 - [x] one-shot read-only CLI composition root
+- [x] explicit provider selection at the CLI composition root
 - [x] model selection through `AgentDefinition.model.modelId`
 - [x] final answer presentation
 - [x] credential-free full-path smoke test with `FakeSampler`
@@ -133,7 +138,7 @@ Token budgeting, pluggable context sources, project rules, pruning, and compacti
 - [x] `ToolBridge`
 - [x] strict input validation in Phase 1 native tools
 - [x] normalized `ToolResult` from Phase 1 native tools
-- [ ] minimal deny-by-default `PermissionPolicy`
+- [x] inline Phase 1 guard denies every non-read tool before dispatch
 
 ## Workspace
 
@@ -143,22 +148,19 @@ Token budgeting, pluggable context sources, project rules, pruning, and compacti
 - [x] `read_file`
 - [x] `list_files`
 - [x] `search_text`
-- [ ] `write_file` or `apply_patch`
-- [ ] `run_command`
 - [x] filesystem-root and path-containment enforcement
-- [ ] cancellation and timeout propagation across the complete runtime
+- [x] cancellation and timeout propagation across the complete runtime
 - [x] bounded filesystem reads and directory listings
-- [ ] command output limits
-- [ ] environment filtering
 
-Every write or command execution must receive an explicit permission decision. The full rule engine and approval workflow remain in Phase 3.
+`write_file`/`apply_patch`, `run_command`, command output limits, and environment filtering are intentionally unavailable in the read-only Phase 1 harness. Every future write or command execution must receive an explicit permission decision. The full rule engine and approval workflow remain in Phase 3.
 
 ## Failure behavior
 
 - [x] normalized provider errors retain a sanitized cause, category, and retryability
 - [x] provider transport retries remain inside the provider adapter
-- [ ] mutating tools are not retried automatically
-- [ ] cancellation reaches active model and workspace operations
+- [x] tool operations are not retried automatically
+- [x] cancellation reaches active model and workspace operations
+- [x] failed later iterations preserve prior model/tool transcript entries
 
 ## Observability
 
@@ -168,15 +170,20 @@ Every write or command execution must receive an explicit permission decision. T
 - [x] tool span
 - [x] model token usage attributes
 - [x] model and loop latency attributes
+- [x] session/turn/model/tool correlation across active spans
+- [x] normalized error attributes and error span status
+- [x] tracing failures do not change harness behavior
 
 ## Tests
 
 - [x] agent loop stop/continue and max-iteration behavior
 - [x] provider response normalization
 - [x] tool validation and dispatch
-- [ ] minimal permission decisions
+- [x] Phase 1 non-read denial decision
 - [x] workspace path boundaries
 - [x] AgentLoop cancellation and no-retry ownership
+- [x] normalized stop-reason outcomes
+- [x] later-iteration failure persistence
 
 Exit criteria:
 
@@ -196,17 +203,19 @@ is possible from the CLI and fully traceable. Mutating files and running command
 
 Goal: make model context explicit and budget-aware.
 
-- [ ] extend the Phase 1 `ContextBuilder`
-- [ ] `ContextSource` abstraction
-- [ ] context/token budget
-- [ ] system instructions source
-- [ ] conversation source
-- [ ] tool definitions source
-- [ ] project rules (`AGENTS.md`)
-- [ ] context accounting trace
-- [ ] tool-result pruning
-- [ ] basic compaction
-- [ ] compaction checkpoints
+Implemented with an asynchronous ContextBuilder, replaceable token estimation, Workspace-backed scoped rules, projection-only pruning, and bounded Sampler summaries. Checkpoints remain in memory; no Phase 3–12 capabilities are enabled. See [CONTEXT-ENGINE.md](CONTEXT-ENGINE.md).
+
+- [x] extend the Phase 1 `ContextBuilder`
+- [x] `ContextSource` abstraction
+- [x] context/token budget
+- [x] system instructions source
+- [x] conversation source
+- [x] tool definitions source
+- [x] project rules (`AGENTS.md`)
+- [x] context accounting trace
+- [x] tool-result pruning
+- [x] basic compaction
+- [x] compaction checkpoints
 
 Exit criteria:
 
@@ -223,7 +232,7 @@ Goal: make execution controllable and extensible.
 ## Permissions
 
 - [ ] `PermissionEngine`
-- [ ] replace/extend the Phase 1 minimal `PermissionPolicy`
+- [ ] replace the Phase 1 inline read-only guard with explicit permission decisions
 - [ ] `AccessKind`
 - [ ] allow rules
 - [ ] ask rules

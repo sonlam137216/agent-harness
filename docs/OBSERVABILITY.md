@@ -27,29 +27,26 @@ This document includes the target trace vocabulary for later roadmap phases. Pha
 
 ## 2. Trace Hierarchy
 
-Target hierarchy as capabilities are introduced:
+Phase 1–2 hierarchy, with later-phase child spans shown where they will attach:
 
 ```text
 Session Trace
 │
 ├── Turn Span
 │   │
-│   ├── context.build
-│   │   ├── context.rules
-│   │   ├── context.skills
-│   │   ├── context.memory
-│   │   └── context.code_retrieval
-│   │
-│   ├── model.sample
-│   │
-│   ├── tool.execute
-│   │   ├── permission.evaluate
-│   │   └── workspace.operation
-│   │
-│   ├── mcp.search
-│   ├── mcp.call
-│   ├── compaction
-│   └── retry.wait
+│   └── agent.loop.iteration
+│       ├── context.build
+│       │   ├── context.rules          (Phase 2)
+│       │   │   └── workspace.operation
+│       │   ├── compaction             (Phase 2, on overflow)
+│       │   │   └── model.sample       (purpose: compaction)
+│       │   ├── context.skills         (Phase 5)
+│       │   ├── context.memory         (Phase 8)
+│       │   └── context.code_retrieval (Phase 7)
+│       ├── model.sample
+│       └── tool.execute
+│           ├── permission.evaluate    (Phase 3)
+│           └── workspace.operation
 │
 └── Turn Span
 ```
@@ -146,9 +143,35 @@ duration_ms
 
 ### `context.build`
 
-Phase 1 records structural message and tool counts. Phase 2 adds token budgeting, rules, compaction, and other source-specific attributes.
+Phase 1 records structural message and tool counts. Phase 2 records estimated source contributions,
+input/window/output budgets, baseline versus final context size, pruned result counts and checkpoint
+reuse. Estimates are explicitly marked and are not provider-reported token usage. Failed budget
+checks also retain safe baseline accounting. Names for skills/memory/retrieval below remain future
+attributes until those sources exist.
+
+Phase 2 additional attributes:
 
 ```text
+context.input_limit
+context.output_reserve
+context.baseline_tokens
+context.framing_tokens
+context.token_counter
+context.tokens_estimated
+context.pruned_results
+context.checkpoint_reused
+success
+error.type
+duration_ms
+```
+
+`context.rules` records session/turn IDs, rule file count, aggregate bytes, duration and normalized
+outcome. Paths and rule content remain excluded. Its filesystem reads create normal Workspace spans.
+
+```text
+session.id
+turn.id
+model_call.id
 context.message_count
 context.system_message_count
 context.conversation_message_count
@@ -182,15 +205,24 @@ latency_ms
 stop_reason
 retry_count
 success
+error.type
+sampling.retryable
 ```
 
-AgentLoop owns the canonical `model.sample` span and records runtime correlation, model, latency, normalized usage, stop reason, and outcome. `OpenAIResponsesSampler` enriches that active span with `provider = openai`, `retry_count`, and the provider request ID when returned; it does not create a duplicate model span. Do not record API keys, authorization headers, complete prompts, tool arguments, raw response bodies, or raw model failures by default.
+AgentLoop owns the canonical `model.sample` span for normal loop sampling and records runtime correlation, model, latency, normalized usage, stop reason, and outcome. Each provider adapter enriches that active span with its provider name and `retry_count`; hosted adapters also record the provider request ID when returned. Adapters do not create duplicate model spans. Do not record API keys, authorization headers, complete prompts, tool arguments, raw response bodies, or raw model failures by default.
+
+Context compaction owns a separate `model.sample` for each real summary call, nested under
+`context.build → compaction`. It carries a fresh `model_call.id`, the current session/turn IDs,
+`model.purpose=compaction`, estimated input size, provider usage, stop reason and latency. The
+provider adapter enriches this active span just as for a normal sample; there are no duplicate
+spans for a single provider call. Summary calls do not consume AgentLoop iteration counters.
 
 ### `tool.execute`
 
 ```text
 session.id
 turn.id
+model_call.id
 tool.name
 tool.kind
 tool_call.id
@@ -199,6 +231,7 @@ tool.result_outcome
 permission.decision
 success
 duration_ms
+error.type
 input_size_bytes
 output_size_bytes
 ```
@@ -214,9 +247,10 @@ duration_ms
 success
 filesystem.bytes_read
 filesystem.entry_count
+error.type
 ```
 
-Filesystem paths and contents are not recorded by default. For commands, record sanitized metadata rather than blindly storing full environment or secrets.
+Filesystem paths and contents are not recorded by default. Failed filesystem operations record only a normalized `error.type` and error span status; they do not record raw exception messages or stacks. For commands, record sanitized metadata rather than blindly storing full environment or secrets.
 
 ### `mcp.search`
 
@@ -259,7 +293,10 @@ This becomes important when adding GitNexus, AST indexes, or semantic search.
 
 ### `compaction`
 
-Phase 2.
+Phase 2 emits one span for each build that attempts compaction. It records session/turn IDs,
+`reason=context_budget`, before/after counts on success, `compaction.turn_count`, duration and
+normalized failure status. Failed builds do not commit partial checkpoints. No transcript or
+summary text is recorded.
 
 ```text
 tokens_before
