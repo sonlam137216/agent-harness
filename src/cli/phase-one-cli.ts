@@ -1,4 +1,14 @@
-import { resolve } from 'node:path';
+import { EventBus } from '../events/event-bus.js';
+import { HookRegistry } from '../hooks/hook-registry.js';
+import {
+  PermissionEngine,
+  type PermissionMode,
+  type PermissionRule,
+  type ApprovalHandler,
+} from '../permissions/permission-engine.js';
+import { tracingSubscriber } from '../observability/tracing-subscriber.js';
+import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 
 import type { AgentDefinition } from '../agent/agent-definition.js';
 import { ContextBuilder } from '../context/context-builder.js';
@@ -14,26 +24,43 @@ import { ProjectRulesSource } from '../project-rules/project-rules-source.js';
 import { AgentLoop } from '../runtime/agent-loop.js';
 import { SessionRuntime, type SessionRuntimeResult } from '../runtime/session-runtime.js';
 import { InMemorySessionStore } from '../session/in-memory-session-store.js';
+import type { SessionStore } from '../session/session-store.js';
+import type { SessionId } from '../ids.js';
 import { ListFilesTool } from '../tools/builtin/list-files.tool.js';
 import { ReadFileTool } from '../tools/builtin/read-file.tool.js';
 import { SearchTextTool } from '../tools/builtin/search-text.tool.js';
 import { ToolBridge } from '../tools/tool-bridge.js';
 import { ToolRegistry } from '../tools/tool-registry.js';
 import { LocalFileSystemCapability } from '../workspace/local-file-system.js';
+import { SkillsSource } from '../skills/skills-source.js';
+import { isSkillName } from '../skills/skill-parser.js';
 
 const MODEL_ENVIRONMENT_VARIABLE = 'AGENT_HARNESS_MODEL';
 const PROVIDER_ENVIRONMENT_VARIABLE = 'AGENT_HARNESS_PROVIDER';
 
 export const CLI_HELP = `Usage:
   pnpm cli -- --provider <provider> --model <model-id> [--workspace <path>] "<prompt>"
+  pnpm cli -- --resume <session-id> "<new prompt>"
+  pnpm cli -- sessions list
+  pnpm cli -- sessions show <session-id>
+  pnpm cli -- sessions rewind <session-id> --keep-turns <n>
 
 Options:
+  --session-dir <path>  Session data directory (default: ~/.agent-harness/sessions)
+  --resume <id>         Continue a saved session with a new user turn
   --provider <provider> Provider adapter: ${MODEL_PROVIDERS.join(', ')} (default: openai)
   --model <model-id>    Model ID stored in AgentDefinition (or AGENT_HARNESS_MODEL)
   --workspace <path>    Read-only workspace root (default: current directory)
   --context-window <n>  Context window estimate (default: 32768; configure for your model)
   --output-reserve <n>  Maximum output tokens reserved (default: 4096)
   --rules-directory <p> Workspace-relative directory for AGENTS.md scope (default: .)
+  --skill <name>        Invoke a skill for this turn (repeatable; also accepts $name in prompt)
+  --user-skills-directory <path> User skill root (default: ~/.agents/skills)
+  --auto-skills        Enable conservative lexical skill selection for this run
+  --permission-mode <m> ask / auto / always-approve (default: auto)
+  --allow-tool <name>    Allow an exact tool name (repeatable)
+  --ask-tool <name>      Require approval for an exact tool name (repeatable)
+  --deny-tool <name>     Deny an exact tool name (repeatable; overrides allow/ask)
   --help                Show this help
 
 Environment:
@@ -51,6 +78,11 @@ export interface PhaseOneCliConfig {
   readonly workspaceRoot: string;
   readonly contextBudget?: ContextBudget;
   readonly rulesDirectory?: string;
+  readonly permissionMode?: PermissionMode;
+  readonly permissionRules?: readonly PermissionRule[];
+  readonly skillNames?: readonly string[];
+  readonly userSkillsDirectory?: string;
+  readonly autoSkills?: boolean;
 }
 
 export type ParsedPhaseOneCliArguments =
@@ -62,6 +94,14 @@ export type ParsedPhaseOneCliArguments =
     };
 
 export interface RunPhaseOneCliOptions extends PhaseOneCliConfig {
+  readonly sessionStore?: SessionStore;
+  readonly sessionId?: SessionId;
+  readonly savedAgent?: AgentDefinition;
+  readonly provider?: ModelProvider;
+  readonly onSessionId?: (id: SessionId) => void;
+  readonly approve?: ApprovalHandler;
+  readonly hooks?: HookRegistry;
+  readonly events?: EventBus;
   readonly sampler: Sampler;
   readonly tracer: TracingHandle['tracer'];
   readonly writeOutput: (text: string) => void;
@@ -103,6 +143,11 @@ export function parsePhaseOneCliArguments(
   let budgetProvided = false;
   let rulesDirectory: string | undefined;
   let workspace = currentDirectory;
+  let permissionMode: PermissionMode | undefined;
+  const skillNames: string[] = [];
+  let userSkillsDirectory: string | undefined;
+  let autoSkills = false;
+  const permissionRules: PermissionRule[] = [];
   const promptParts: string[] = [];
 
   for (let index = 0; index < arguments_.length; index += 1) {
@@ -148,6 +193,44 @@ export function parsePhaseOneCliArguments(
       index += 1;
       continue;
     }
+    if (argument === '--skill') {
+      const name = optionValue(arguments_, index, argument);
+      if (!isSkillName(name)) throw new CliUsageError('--skill requires a lowercase skill name.');
+      skillNames.push(name);
+      index += 1;
+      continue;
+    }
+    if (argument === '--user-skills-directory') {
+      const directory = optionValue(arguments_, index, argument);
+      if (directory.trim() === '') throw new CliUsageError('Provide a user skills directory.');
+      userSkillsDirectory = resolve(currentDirectory, directory);
+      index += 1;
+      continue;
+    }
+    if (argument === '--auto-skills') {
+      autoSkills = true;
+      continue;
+    }
+    if (argument === '--permission-mode') {
+      const value = optionValue(arguments_, index, argument);
+      if (value !== 'ask' && value !== 'auto' && value !== 'always-approve') {
+        throw new CliUsageError('Permission mode must be ask, auto, or always-approve.');
+      }
+      permissionMode = value;
+      index += 1;
+      continue;
+    }
+    if (argument === '--allow-tool' || argument === '--ask-tool' || argument === '--deny-tool') {
+      const toolName = optionValue(arguments_, index, argument).trim();
+      if (toolName.length === 0) throw new CliUsageError('A permission rule requires a tool name.');
+      permissionRules.push({
+        toolName,
+        decision:
+          argument === '--allow-tool' ? 'allow' : argument === '--ask-tool' ? 'ask' : 'deny',
+      });
+      index += 1;
+      continue;
+    }
     if (argument?.startsWith('-') === true) {
       throw new CliUsageError(`Unknown option: ${argument}`);
     }
@@ -178,8 +261,13 @@ export function parsePhaseOneCliArguments(
       modelId,
       prompt,
       workspaceRoot: resolve(currentDirectory, workspace),
+      ...(permissionMode === undefined ? {} : { permissionMode }),
+      ...(permissionRules.length === 0 ? {} : { permissionRules }),
       ...(budgetProvided ? { contextBudget: { windowTokens, outputReserveTokens } } : {}),
       ...(rulesDirectory === undefined ? {} : { rulesDirectory }),
+      ...(skillNames.length === 0 ? {} : { skillNames: [...new Set(skillNames)] }),
+      ...(userSkillsDirectory === undefined ? {} : { userSkillsDirectory }),
+      ...(autoSkills ? { autoSkills } : {}),
     },
   };
 }
@@ -187,6 +275,8 @@ export function parsePhaseOneCliArguments(
 export async function runPhaseOneCli(
   options: RunPhaseOneCliOptions,
 ): Promise<SessionRuntimeResult> {
+  if (options.skillNames?.some((name) => !isSkillName(name)))
+    throw new CliUsageError('--skill requires a lowercase skill name.');
   const fileSystem = new LocalFileSystemCapability({
     workspaceRoot: options.workspaceRoot,
     tracer: options.tracer,
@@ -196,8 +286,25 @@ export async function runPhaseOneCli(
   registry.register(new ListFilesTool(fileSystem));
   registry.register(new SearchTextTool(fileSystem));
 
-  const toolBridge = new ToolBridge(registry, options.tracer);
+  const events = options.events ?? new EventBus();
+  const hooks = options.hooks ?? new HookRegistry(options.tracer);
+  const unsubscribeTracing = events.subscribe(tracingSubscriber);
+  let reportedSession = false;
+  const unsubscribeIdentity = events.subscribe((event) => {
+    if (!reportedSession && event.type === 'SessionUpdated') {
+      reportedSession = true;
+      options.onSessionId?.(event.sessionId);
+    }
+  });
+  const permissions = new PermissionEngine({
+    ...(options.permissionMode === undefined ? {} : { mode: options.permissionMode }),
+    ...(options.permissionRules === undefined ? {} : { rules: options.permissionRules }),
+    ...(options.approve === undefined ? {} : { approve: options.approve }),
+  });
+  const toolBridge = new ToolBridge(registry, options.tracer, { permissions, events, hooks });
   const agentLoop = new AgentLoop({
+    events,
+    hooks,
     sampler: options.sampler,
     contextBuilder: new ContextBuilder(options.tracer, {
       ...(options.contextBudget === undefined ? {} : { budget: options.contextBudget }),
@@ -206,31 +313,63 @@ export async function runPhaseOneCli(
         new ProjectRulesSource(fileSystem, options.tracer, {
           ...(options.rulesDirectory === undefined ? {} : { directory: options.rulesDirectory }),
         }),
+        new SkillsSource(
+          [
+            { scope: 'project', files: fileSystem, directory: '.agents/skills' },
+            {
+              scope: 'user',
+              files: new LocalFileSystemCapability({
+                workspaceRoot: options.userSkillsDirectory ?? join(homedir(), '.agents', 'skills'),
+                tracer: options.tracer,
+                maxReadBytes: 65_536,
+              }),
+              directory: '.',
+            },
+          ],
+          options.tracer,
+          { automatic: options.autoSkills ?? false },
+        ),
       ],
     }),
     toolBridge,
     tracer: options.tracer,
   });
   const runtime = new SessionRuntime({
-    sessionStore: new InMemorySessionStore(),
+    events,
+    hooks,
+    sessionStore: options.sessionStore ?? new InMemorySessionStore(),
     agentLoop,
     tracer: options.tracer,
   });
   const agent: AgentDefinition = {
-    name: 'phase-one-read-only-cli',
+    name: options.savedAgent?.name ?? 'phase-one-read-only-cli',
     systemPrompt:
+      options.savedAgent?.systemPrompt ??
       'You are a read-only coding assistant. Use the available tools when workspace evidence is needed. Tool paths are relative to the workspace root. Do not claim to modify files.',
     model: { modelId: options.modelId },
   };
 
-  const result = await runtime.run({
-    agent,
-    prompt: options.prompt,
-    tools: registry.getModelDefinitions(),
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-  });
-  if (result.finalText === null) throw new CliRunError(result.outcome);
+  try {
+    const result = await runtime.run({
+      agent,
+      prompt: [...(options.skillNames ?? []).map((name) => `$${name}`), options.prompt].join('\n'),
+      tools: registry.getModelDefinitions(),
+      ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+      configuration: {
+        workspaceRoot: options.workspaceRoot,
+        ...(options.provider === undefined ? {} : { provider: options.provider }),
+        contextBudget: options.contextBudget ?? DEFAULT_CONTEXT_BUDGET,
+        rulesDirectory: options.rulesDirectory ?? '.',
+      },
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    if (result.finalText === null) throw new CliRunError(result.outcome);
 
-  options.writeOutput(result.finalText);
-  return result;
+    options.writeOutput(result.finalText);
+    return result;
+  } finally {
+    runtime.dispose();
+    unsubscribeTracing();
+    unsubscribeIdentity();
+  }
 }

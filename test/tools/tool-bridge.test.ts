@@ -14,6 +14,8 @@ import { ToolBridge } from '../../src/tools/tool-bridge.js';
 import type { Tool } from '../../src/tools/tool.interface.js';
 import { ToolRegistry } from '../../src/tools/tool-registry.js';
 import type { FileSystemCapability } from '../../src/workspace/filesystem-capability.js';
+import { PermissionEngine } from '../../src/permissions/permission-engine.js';
+import { HookRegistry } from '../../src/hooks/hook-registry.js';
 
 function executionContext(signal?: AbortSignal) {
   return {
@@ -39,6 +41,54 @@ describe('ToolBridge', () => {
 
   afterEach(async () => {
     await tracing.shutdown();
+  });
+
+  it('never asks approval or invokes pre-hooks for invalid input', async () => {
+    const approve = vi.fn(() => true);
+    const hooks = new HookRegistry();
+    const pre = vi.fn();
+    hooks.register('PreToolUse', pre);
+    const execute = vi.fn<Tool['execute']>();
+    registry.register({
+      definition: { name: 'edit', accessKind: 'write', description: 'test', inputSchema: {} },
+      validateInput: () => ({ valid: false, message: 'invalid' }),
+      execute,
+    });
+    const bridge = new ToolBridge(registry, tracing.tracer, {
+      hooks,
+      permissions: new PermissionEngine({ mode: 'ask', approve }),
+    });
+    await bridge.execute(
+      { id: createToolCallId(), name: 'edit', arguments: {} },
+      executionContext(),
+    );
+    expect(approve).not.toHaveBeenCalled();
+    expect(pre).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('authorizes and executes the same snapshot even if the caller changes its original arguments', async () => {
+    const call = { id: createToolCallId(), name: 'edit', arguments: { path: 'original' } };
+    const execute = vi.fn<Tool['execute']>((value) =>
+      Promise.resolve({ toolCallId: value.id, outcome: 'success', output: null }),
+    );
+    registry.register({
+      definition: { name: 'edit', accessKind: 'write', description: 'test', inputSchema: {} },
+      validateInput: () => ({ valid: true }),
+      execute,
+    });
+    const bridge = new ToolBridge(registry, tracing.tracer, {
+      permissions: new PermissionEngine({
+        mode: 'ask',
+        approve: (request) => {
+          expect(request.call.arguments.path).toBe('original');
+          call.arguments.path = 'changed';
+          return true;
+        },
+      }),
+    });
+    await bridge.execute(call, executionContext());
+    expect(execute.mock.calls[0]?.[0].arguments.path).toBe('original');
   });
 
   it('validates, dispatches, propagates cancellation, and traces safe correlation data', async () => {
@@ -76,8 +126,10 @@ describe('ToolBridge', () => {
       },
     });
     expect(readFile).toHaveBeenCalledWith('private-file.txt', { signal: controller.signal });
-    const spans = exporter.getFinishedSpans();
+    const allSpans = exporter.getFinishedSpans();
+    const spans = allSpans.filter((span) => span.name === 'tool.execute');
     expect(spans).toHaveLength(1);
+    expect(allSpans.filter((span) => span.name === 'permission.evaluate')).toHaveLength(1);
     expect(spans[0]?.name).toBe('tool.execute');
     expect(spans[0]?.attributes).toEqual(
       expect.objectContaining({
@@ -184,7 +236,7 @@ describe('ToolBridge', () => {
     expect(
       JSON.stringify(exporter.getFinishedSpans().map((span) => span.attributes)),
     ).not.toContain('secret-token');
-    const span = exporter.getFinishedSpans()[0];
+    const span = exporter.getFinishedSpans().find((candidate) => candidate.name === 'tool.execute');
     expect(span?.attributes['error.type']).toBe('tool_execution_error');
     expect(span?.status.code).toBe(SpanStatusCode.ERROR);
   });
@@ -216,7 +268,7 @@ describe('ToolBridge', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it('denies non-read tools in Phase 1 without executing them', async () => {
+  it('denies unmatched non-read tools by default without executing them', async () => {
     const execute = vi.fn<Tool['execute']>();
     registry.register({
       definition: {

@@ -132,6 +132,7 @@ export async function compactTurns(
         ],
         summary: response.text,
         modelCallId: response.modelCallId,
+        usage: response.usage,
       };
     } catch (error) {
       span.setAttributes({

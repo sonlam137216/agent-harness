@@ -18,6 +18,65 @@ This document describes both the small current implementation shape and the inte
 
 ## 2. Target High-Level Architecture
 
+### Phase 4 implementation decision
+
+Durability uses one versioned JSON file per session, behind the existing SessionStore port.
+FileSessionStore owns schema validation and serialization; a narrow Workspace RecordStorage
+capability owns bounded reads, atomic replace (temporary file, fsync, rename), listing and exclusive
+per-session locks. Runtime never imports filesystem APIs. This is application-owned storage,
+not a model-facing file mutation tool. No database dependency or second repository abstraction is added.
+
+Session stores creation/update metadata, agent/workspace configuration, original turns and tool
+results, context checkpoints, provider-neutral usage records and trace correlation. CLI composition
+restores saved configuration when resuming, while approvals and permission grants are fresh per run.
+SessionRuntime locks the entire load/run/save operation; rewind uses the same lock. Contention fails
+explicitly rather than losing updates. Abrupt process death may leave a lock; it is never removed on
+a timer or guessed stale while another process could still execute. Operators must clear a stale lock
+only after stopping all users of that session. Graceful cancellation releases it.
+
+On resume, interrupted turns become explicitly interrupted. Pending tool calls receive clearly
+marked execution-unknown records so providers receive valid call/result groups; no tool is replayed
+and no success is inferred. Rewind retains a chosen number of complete turns, drops usage tied to
+removed turns, and invalidates a checkpoint when its covered prefix is removed. It does not undo
+workspace effects. Persistent storage remains bounded, local, single-writer per session; no actor,
+background queue, automatic replay or event sourcing is introduced.
+
+See [PHASE-4.md](PHASE-4.md) for the file format, CLI and recovery limits.
+
+### Phase 3 implementation decision
+
+Phase 3 introduces three existing planned boundaries: Permissions decides whether a validated
+tool call may execute; Hooks supplies ordered, trusted application callbacks at lifecycle boundaries;
+Events publishes canonical lifecycle facts to subscribers. Runtime and ToolBridge consume these
+boundaries without filesystem, provider, or CLI dependencies. No new dependencies are required.
+
+`ToolBridge` validates, runs `PreToolUse`, evaluates `PermissionEngine`, then dispatches once.
+Hooks receive immutable snapshots and cannot rewrite calls or override permissions. A pre-tool
+hook can veto; post-tool hook failures are reported without replacing an already executed result.
+Rules match exact tool names and/or access kinds, with `deny > ask > allow`. Explicit ask rules
+always require approval, even in always-approve mode. Default auto mode allows reads and denies
+unmatched mutations; ask mode requests approval for unmatched mutations; always-approve allows
+unmatched calls. Destructive tool metadata imposes an approval floor. Missing, failed, cancelled,
+or non-affirmative approval denies execution. Approval applies to one immutable call only.
+
+Hooks are sequential and cancellation-aware. Pre-boundary failures stop that action; AfterModel
+failure preserves the sampled transcript. TurnEnd is a notification after persistence and cannot
+rewrite a completed turn. SessionStart runs only for a newly created session. These are trusted
+in-process callbacks, not scripts or a sandbox.
+
+One EventBus is scoped to one SessionRuntime and shared with its AgentLoop and ToolBridge by the
+composition root. Events include session/turn/model/tool IDs at their owning boundaries. A required
+SessionUpdated subscriber saves through SessionStore before and after each turn; persistence
+failures surface. Ordinary observer failures are contained. Runtime retains orchestration and the
+load boundary. Dispose the runtime to remove its persistence subscription. Phase 3 storage was in-memory; Phase 4 supplies the durable adapter.
+
+Existing operation spans remain the single timing/parentage instrumentation path. The tracing
+subscriber adds metadata-only events to active spans, never duplicate operation spans. Compaction
+retains Context-owned instrumentation; model hooks/events describe normal AgentLoop sampling.
+
+See [PHASE-3.md](PHASE-3.md) for supported policy, lifecycle and failure contracts. Native tools
+remain read-only; write/command capabilities remain future work. Phase 4 implements durable sessions.
+
 This is the target dependency shape. It is not the Phase 0 project scaffold.
 
 ```text
@@ -258,7 +317,10 @@ src/session/
 ├── session.ts
 ├── turn.ts
 ├── session-store.ts
-└── in-memory-session-store.ts
+├── in-memory-session-store.ts
+├── file-session-store.ts
+├── session-codec.ts
+└── session-history.ts
 ```
 
 The minimal Phase 1 state is:
@@ -281,7 +343,7 @@ Tool arguments and results use harness-owned JSON value types. Session state mus
 
 Phase 2 adds an optional versioned `contextCheckpoint` containing covered turn IDs, summary text and the summarization model-call ID. Original turns remain intact; the checkpoint is persisted only through the existing SessionStore boundary.
 
-Start with an in-memory `SessionStore`. The stable store port preserves a persistence seam, but durability is not promised until Phase 4. Do not create both `SessionStore` and `SessionRepository` for the same responsibility.
+Start with an in-memory `SessionStore`. The stable store port preserves a persistence seam, and Phase 4 now supplies FileSessionStore with versioned durable JSON records. Do not create both `SessionStore` and `SessionRepository` for the same responsibility.
 
 Do not introduce a separate `ChatState` until it has a responsibility distinct from the session's ordered turns. Token accounting and richer model/runtime metadata are added by their owning slices.
 
@@ -311,7 +373,7 @@ Phase 2 implementation contract:
   commit a checkpoint only after the complete context build succeeds. Failure/cancellation never
   replaces the original transcript or checkpoint. An irreducible prompt fails explicitly.
 - Checkpoints live in Session memory, cover a validated prefix of turn IDs, and are context state,
-  not cross-session memory. Durable checkpoints remain Phase 4. Summaries are lossy model output
+  not cross-session memory. Phase 4 persists checkpoints through SessionStore. Summaries are lossy model output
   presented as historical data, never system instructions or authorization.
 - A provider-neutral optional output-token limit on ModelRequest carries the Context-selected
   reserve into adapters, including compaction calls. Provider wire mapping remains in Model.
@@ -574,27 +636,38 @@ arguments. Automatic per-tool rules discovery is not implemented in Phase 2.
 
 ```text
 src/skills/
-├── skill.ts
-├── skill-loader.ts
-├── skill-manager.ts
-└── skill-selector.ts
+├── skill-parser.ts
+├── skill-selector.ts
+└── skills-source.ts
 ```
 
-Skills are reusable prompt/instruction packages.
+Phase 5 adds reusable procedural instructions through the existing ContextSource boundary.
+SkillsSource depends only on read-only FileSystemCapability ports and tracing; Runtime, Tools
+and provider adapters do not acquire skill discovery or selection responsibilities. The CLI
+constructs separate contained filesystem capabilities for project `.agents/skills` and user
+`~/.agents/skills` (overridable with `--user-skills-directory`). The user capability is never
+registered as a model-facing file tool. No dependency, manager abstraction or executable tool is added.
 
-They belong to context/capability composition, not the core agent loop.
+Discovery reads immediate child directories containing SKILL.md, with bounded files, aggregate
+bytes and skill counts. Missing directories/files are optional; malformed skills, duplicate names
+within a scope, containment and I/O failures are explicit Context errors with sanitized causes.
+Project names override user names. A small documented frontmatter subset supports required name
+and description strings and a nonempty Markdown body; unsupported metadata is rejected.
 
-Initial format can follow:
+Only the active turn's user message can explicitly invoke `$skill-name`. CLI `--skill` flags are
+stored as equivalent invocations in that user message, retaining intent across persistence without
+changing the session format. Historical messages, tool output and skill bodies cannot select more
+skills. Automatic lexical selection is opt-in, deterministic and capped. Bodies of selected skills
+are injected as labeled system context after project rules and cannot override rules or permission
+policy. All selected content counts against the existing Context budget and is never silently
+truncated. No scripts execute and no referenced resource files are automatically loaded.
 
-```text
-skills/<name>/SKILL.md
-```
+Skills are rediscovered on each context build; resume uses current files and requires fresh
+invocations for the new turn. Skill contents and automatic-selection configuration are not session
+snapshots. `context.skills` records selection/injection counts and sizes, while `context.build`
+records skill token contribution. Neither records prompts, names, paths or instruction text.
 
-Skills may later be:
-
-- explicitly invoked
-- dynamically selected
-- discovered from project/user scopes
+See [PHASE-5.md](PHASE-5.md) for the supported format, selection and limits.
 
 ---
 
@@ -663,10 +736,8 @@ Worktree isolation can be added later for agents that modify files.
 
 ```text
 src/permissions/
-├── permission-engine.ts             (Phase 3)
-├── permission-rule.ts               (Phase 3)
-├── access-kind.ts                   (Phase 3)
-└── dangerous-command-detector.ts    (Phase 3)
+├── permission-engine.ts
+└── access-kind.ts
 ```
 
 Initial modes:
@@ -693,9 +764,7 @@ Phase 1 has no mutating capabilities and keeps a narrow inline ToolBridge guard 
 
 ```text
 src/hooks/
-├── hook-manager.ts
-├── hook.ts
-└── hook-events.ts
+└── hook-registry.ts
 ```
 
 Initial lifecycle hooks:
@@ -708,12 +777,11 @@ AfterModel
 PreToolUse
 PostToolUse
 TurnEnd
-SessionEnd
 ```
 
 Hooks extend behavior without modifying the core loop.
 
-Hooks are not required for Phase 0 or Phase 1. Direct calls at explicit boundaries are clearer until more than one lifecycle extension exists.
+Phase 3 supplies an ordered registry of trusted in-process hooks. Hooks receive immutable snapshots and cannot transform tool arguments. Start/pre hooks fail closed; AfterModel failure preserves the sampled transcript; PostToolUse and TurnEnd failures are recorded without changing an executed result. SessionEnd is deferred because the current runtime has no persistent session lifecycle.
 
 ---
 
@@ -722,24 +790,24 @@ Hooks are not required for Phase 0 or Phase 1. Direct calls at explicit boundari
 ```text
 src/events/
 ├── event-bus.ts
+├── persistence-subscriber.ts
 └── runtime-event.ts
 ```
 
-Example events:
+Phase 3 events:
 
 ```text
 SessionStarted
 TurnStarted
-ContextBuilt
+SessionUpdated
 ModelStarted
 ModelCompleted
 ToolStarted
 ToolCompleted
-CompactionStarted
-CompactionCompleted
 TurnCompleted
-SessionCompleted
 ```
+
+Context/compaction and session-end event extensions are deferred. The event bus bounds ordinary observer callbacks to one second each by default, contains their failures, and propagates required SessionUpdated persistence failures. Callbacks are trusted application code; cancellation cannot undo callback effects.
 
 Consumers may include:
 
@@ -798,7 +866,7 @@ CLI composition root
 
 Do not hide initial wiring behind a dependency-injection framework. Runtime components consume interfaces and must not instantiate provider SDKs, concrete workspaces, or telemetry backends themselves.
 
-The Phase 1 composition root lives in `src/cli/phase-one-cli.ts`. It constructs the in-memory `SessionStore`, `ContextBuilder`, `AgentLoop`, read-only tool registry and bridge, and local filesystem capability around an injected `Sampler` and tracer. The same path works with OpenAI, Anthropic, Ollama or a deterministic fake. Phase 2 adds explicit context budget configuration and a Workspace-backed project rules source here, without creating a second runtime path.
+The Phase 1 composition root lives in `src/cli/phase-one-cli.ts`. It constructs the in-memory `SessionStore`, `ContextBuilder`, `AgentLoop`, read-only tool registry and bridge, and local filesystem capability around an injected `Sampler` and tracer. The same path works with OpenAI, Anthropic, Ollama or a deterministic fake. Phase 2 adds explicit context budget configuration and a Workspace-backed project rules source here. Phase 4 lets this helper accept a SessionStore; main.ts constructs FileSessionStore over LocalRecordStorage, while session-cli.ts handles configuration restoration and management commands. There is still one agent runtime path.
 
 ### 4.19 Phase 1 CLI
 
@@ -812,7 +880,7 @@ The CLI is a one-shot presentation and composition boundary. It accepts one prom
 
 The model ID is selected with `--model` or `AGENT_HARNESS_MODEL`; `--provider` or `AGENT_HARNESS_PROVIDER` selects the adapter. Provider credentials configure only the concrete adapter and are never accepted as command-line arguments. Phase 2 adds `--context-window`, `--output-reserve` and `--rules-directory`; see CONTEXT-ENGINE.md. `--workspace` defaults to the current directory and is resolved to the absolute root enforced by `LocalFileSystemCapability`.
 
-Phase 1 remains intentionally one-shot and in-memory. There is no REPL/TUI, permission prompt, resume command, background work, or persistent session storage. Existing runtime spans provide tool/model activity when the default console tracing exporter is used; the CLI does not create duplicate lifecycle spans.
+The CLI remains one-shot per invocation. Phase 3 adds permission flags and an exact-call TTY approval prompt; without a TTY, approval requests are denied. Phase 4 adds persistent JSON storage and resume/list/show/rewind commands; there is no REPL/TUI or background work. Existing runtime spans provide tool/model activity when the default console tracing exporter is used; the CLI does not create duplicate lifecycle spans.
 
 ---
 
@@ -855,7 +923,7 @@ Runtime → concrete provider ❌
 Runtime → concrete workspace ❌
 ```
 
-Observability and lifecycle subscribers may observe boundaries but should not reverse dependency direction or change business outcomes.
+Observability subscribers must not change business outcomes. The required persistence subscriber is an intentional exception: SessionStore failures surface rather than pretending the turn was saved. Subscribers do not reverse dependency direction.
 
 ---
 
@@ -938,16 +1006,7 @@ ContextBuilder
 Sampler
  ↓
 Model requests read_file
- ↓
-ToolBridge
- ↓
-ReadFileTool
- ↓
-LocalWorkspace
- ↓
-ToolResult
- ↓
-Model
+ ↓ 
  ↓
 Final Answer
 ```

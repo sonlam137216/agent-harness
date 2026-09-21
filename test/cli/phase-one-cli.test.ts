@@ -67,6 +67,94 @@ describe('Phase 1 CLI', () => {
     );
   });
 
+  it('parses explicit permission modes and repeated exact-name rules', () => {
+    const parsed = parsePhaseOneCliArguments(
+      [
+        '--model',
+        'fake',
+        '--permission-mode',
+        'ask',
+        '--allow-tool',
+        'read_file',
+        '--ask-tool',
+        'read_file',
+        '--deny-tool',
+        'search_text',
+        'inspect',
+      ],
+      {},
+      '/workspace',
+    );
+    expect(parsed).toMatchObject({
+      config: {
+        permissionMode: 'ask',
+        permissionRules: [
+          { toolName: 'read_file', decision: 'allow' },
+          { toolName: 'read_file', decision: 'ask' },
+          { toolName: 'search_text', decision: 'deny' },
+        ],
+      },
+    });
+    expect(() =>
+      parsePhaseOneCliArguments(
+        ['--model', 'fake', '--permission-mode', 'unsafe', 'inspect'],
+        {},
+        '/workspace',
+      ),
+    ).toThrow(CliUsageError);
+  });
+
+  it.each([true, false])(
+    'runs the CLI approval path end-to-end (approved=%s)',
+    async (approved) => {
+      const directory = await mkdtemp(join(tmpdir(), 'phase-three-cli-'));
+      temporaryDirectories.push(directory);
+      await writeFile(join(directory, 'fixture.txt'), 'approved file content');
+      const tracing = createTracing({ exporter: new InMemorySpanExporter() });
+      tracingHandles.push(tracing);
+      let iteration = 0;
+      const approve = vi.fn(() => approved);
+      const sample: Sampler['sample'] = (request) => {
+        iteration += 1;
+        if (iteration === 1)
+          return Promise.resolve({
+            modelCallId: request.modelCallId,
+            text: null,
+            toolCalls: [
+              { id: createToolCallId(), name: 'read_file', arguments: { path: 'fixture.txt' } },
+            ],
+            usage: { inputTokens: 1, outputTokens: 1 },
+            stopReason: 'tool_calls',
+          });
+        const message = request.messages.at(-1);
+        expect(message?.role).toBe('tool');
+        if (message?.role === 'tool')
+          expect(message.content).toContain(approved ? 'approved file content' : 'access_denied');
+        return Promise.resolve({
+          modelCallId: request.modelCallId,
+          text: 'Finished',
+          toolCalls: [],
+          usage: { inputTokens: 1, outputTokens: 1 },
+          stopReason: 'end_turn',
+        });
+      };
+      const result = await runPhaseOneCli({
+        modelId: 'fake',
+        prompt: 'read fixture',
+        workspaceRoot: directory,
+        userSkillsDirectory: join(directory, 'user-skills'),
+        tracer: tracing.tracer,
+        sampler: { sample },
+        writeOutput: () => undefined,
+        approve,
+        permissionMode: 'always-approve',
+        permissionRules: [{ decision: 'ask', toolName: 'read_file' }],
+      });
+      expect(result.outcome).toBe('completed');
+      expect(approve).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('parses model, workspace, and prompt without introducing provider config into AgentDefinition', () => {
     expect(
       parsePhaseOneCliArguments(
@@ -161,6 +249,7 @@ describe('Phase 1 CLI', () => {
       prompt: 'Read fixture.txt and report its contents.',
       workspaceRoot,
       sampler,
+      userSkillsDirectory: join(workspaceRoot, 'user-skills'),
       tracer: tracing.tracer,
       writeOutput,
     });
@@ -221,6 +310,7 @@ describe('Phase 1 CLI', () => {
       prompt: 'Read fixture.txt and report its contents.',
       workspaceRoot,
       sampler: new ReadThenAnswerFakeSampler(),
+      userSkillsDirectory: join(workspaceRoot, 'user-skills'),
       tracer: tracing.tracer,
       writeOutput,
     });

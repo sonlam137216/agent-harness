@@ -1,3 +1,6 @@
+import type { EventBus } from '../events/event-bus.js';
+import type { HookRegistry } from '../hooks/hook-registry.js';
+import { createCancellationScope, type CancellationScope } from '../cancellation.js';
 import { SpanStatusCode } from '@opentelemetry/api';
 
 import type { AgentDefinition } from '../agent/agent-definition.js';
@@ -24,11 +27,14 @@ export interface AgentLoopOptions {
   readonly toolBridge: ToolBridge;
   readonly tracer: TracingHandle['tracer'];
   readonly maxIterations?: number;
+  readonly hooks?: HookRegistry;
+  readonly events?: EventBus;
 }
 
 export interface AgentLoopRunInput {
   readonly agent: AgentDefinition;
   readonly session: Session;
+  readonly onProgress?: (session: Session) => Promise<void>;
   readonly turnId: TurnId;
   readonly tools: readonly ModelToolDefinition[];
   readonly signal?: AbortSignal;
@@ -44,12 +50,6 @@ export interface AgentLoopResult {
   readonly outcome: AgentLoopOutcome;
   readonly iterations: number;
   readonly finalText: string | null;
-}
-
-interface CancellationScope {
-  readonly signal?: AbortSignal;
-  readonly deadlineReached: () => boolean;
-  readonly dispose: () => void;
 }
 
 interface IterationResult {
@@ -97,50 +97,6 @@ function setTurnStatus(session: Session, turnId: TurnId, status: TurnStatus): Se
   return replaceTurn(session, { ...turn, status });
 }
 
-function createCancellationScope(
-  parentSignal: AbortSignal | undefined,
-  deadlineMs: number | undefined,
-): CancellationScope {
-  if (deadlineMs !== undefined && !Number.isFinite(deadlineMs)) {
-    throw new RangeError('deadlineMs must be a finite absolute timestamp.');
-  }
-  if (parentSignal === undefined && deadlineMs === undefined) {
-    return { deadlineReached: () => false, dispose: () => undefined };
-  }
-
-  const controller = new AbortController();
-  let deadlineReached = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const cancelFromParent = (): void => controller.abort(parentSignal?.reason);
-
-  if (parentSignal?.aborted === true) {
-    cancelFromParent();
-  } else {
-    parentSignal?.addEventListener('abort', cancelFromParent, { once: true });
-    if (deadlineMs !== undefined) {
-      const remainingMs = deadlineMs - Date.now();
-      if (remainingMs <= 0) {
-        deadlineReached = true;
-        controller.abort();
-      } else {
-        timer = setTimeout(() => {
-          deadlineReached = true;
-          controller.abort();
-        }, remainingMs);
-      }
-    }
-  }
-
-  return {
-    signal: controller.signal,
-    deadlineReached: () => deadlineReached,
-    dispose: () => {
-      if (timer !== undefined) clearTimeout(timer);
-      parentSignal?.removeEventListener('abort', cancelFromParent);
-    },
-  };
-}
-
 function isCancellationRequested(cancellation: CancellationScope): boolean {
   return cancellation.signal?.aborted === true;
 }
@@ -151,6 +107,8 @@ export class AgentLoop {
   readonly #toolBridge: ToolBridge;
   readonly #tracer: TracingHandle['tracer'];
   readonly #maxIterations: number;
+  readonly #hooks: HookRegistry | undefined;
+  readonly #events: EventBus | undefined;
 
   public constructor(options: AgentLoopOptions) {
     if (!Number.isSafeInteger(options.maxIterations ?? DEFAULT_MAX_ITERATIONS)) {
@@ -160,6 +118,8 @@ export class AgentLoop {
       throw new RangeError('maxIterations must be a positive safe integer.');
     }
 
+    this.#hooks = options.hooks;
+    this.#events = options.events;
     this.#sampler = options.sampler;
     this.#contextBuilder = options.contextBuilder;
     this.#toolBridge = options.toolBridge;
@@ -205,7 +165,21 @@ export class AgentLoop {
                 ...(cancellation.signal === undefined ? {} : { signal: cancellation.signal }),
                 ...(input.deadlineMs === undefined ? {} : { deadlineMs: input.deadlineMs }),
               });
-              session = context.session;
+              if (context.session !== session) {
+                session = context.session;
+                await input.onProgress?.(session);
+              }
+              await this.#hooks?.run(
+                {
+                  name: 'BeforeModel',
+                  sessionId: session.id,
+                  turnId: input.turnId,
+                  modelCallId,
+                  request: context.request,
+                },
+                cancellation.signal,
+              );
+              cancellation.signal?.throwIfAborted();
               const response = await this.#sample(
                 context.request,
                 session.id,
@@ -215,12 +189,6 @@ export class AgentLoop {
                 input.deadlineMs,
               );
 
-              if (response.modelCallId !== modelCallId) {
-                throw new AgentLoopStateError(
-                  'Sampler returned a mismatched model call correlation ID.',
-                );
-              }
-
               session = appendEntries(session, input.turnId, [
                 {
                   kind: 'assistant_message',
@@ -229,6 +197,33 @@ export class AgentLoop {
                   toolCalls: response.toolCalls,
                 },
               ]);
+
+              session = {
+                ...session,
+                usage: [
+                  ...(session.usage ?? []),
+                  {
+                    modelCallId,
+                    turnId: input.turnId,
+                    modelId: context.request.modelId,
+                    purpose: 'response',
+                    tokens: response.usage,
+                    stopReason: response.stopReason,
+                  },
+                ],
+              };
+              await input.onProgress?.(session);
+              await this.#hooks?.run(
+                {
+                  name: 'AfterModel',
+                  sessionId: session.id,
+                  turnId: input.turnId,
+                  modelCallId,
+                  response,
+                },
+                cancellation.signal,
+              );
+              cancellation.signal?.throwIfAborted();
 
               if (response.toolCalls.length === 0) {
                 const completed = response.stopReason === 'end_turn' && response.text !== null;
@@ -263,6 +258,7 @@ export class AgentLoop {
                 session = appendEntries(session, input.turnId, [
                   { kind: 'tool_result', ...toolResult },
                 ]);
+                await input.onProgress?.(session);
               }
 
               span.setAttribute('loop.outcome', 'continue');
@@ -367,8 +363,20 @@ export class AgentLoop {
         model: request.modelId,
       });
 
+      let success = false;
       try {
+        await this.#events?.publish({
+          type: 'ModelStarted',
+          sessionId,
+          turnId,
+          modelCallId: request.modelCallId,
+        });
+        signal?.throwIfAborted();
         const response = await this.#sampler.sample(request, samplingOptions);
+        if (response.modelCallId !== request.modelCallId) {
+          throw new AgentLoopStateError('Sampler returned a mismatched model call correlation ID.');
+        }
+        success = true;
         span.setAttributes({
           success: true,
           input_tokens: response.usage.inputTokens,
@@ -393,6 +401,13 @@ export class AgentLoop {
         }
         throw error;
       } finally {
+        await this.#events?.publish({
+          type: 'ModelCompleted',
+          sessionId,
+          turnId,
+          modelCallId: request.modelCallId,
+          success,
+        });
         span.setAttribute('latency_ms', performance.now() - startedAt);
         span.end();
       }

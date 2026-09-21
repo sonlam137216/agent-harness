@@ -4,6 +4,11 @@ The Context Engine decides what is sent to the model. It never executes tools, g
 or changes the raw conversation. Runtime adopts the Session returned by Context and saves it
 through the existing SessionStore. The CLI remains one-shot and read-only.
 
+Phase 5 adds a `SkillsSource` through the same `additionalSources` boundary. It loads bounded
+project/user workflows, applies explicit or opt-in automatic selection, and injects selected bodies
+after project rules. Skill contributions count as `context.skills_tokens` and are mandatory during
+budget enforcement. See [PHASE-5.md](PHASE-5.md) for invocation, precedence and format limits.
+
 ## Configuration
 
 ```sh
@@ -56,7 +61,7 @@ prompt prose or automatically discover rules for every path a tool might later r
 ## Overflow behavior
 
 1. Load sources, validate the transcript and compute the baseline input estimate.
-2. Ensure mandatory system/rules/schema/current-turn content fits. Never truncate these sources.
+2. Ensure mandatory system/rules/selected-skills/schema/current-turn content fits. Never truncate these sources.
 3. If necessary, shorten oversized tool results from prior terminal turns in the model-facing
    projection. Keep result outcomes and call IDs, mark pruning explicitly, and preserve current-turn
    results verbatim. Apply the projection only when the counter measures a reduction.
@@ -81,8 +86,7 @@ instruction. It is inherently lossy; exact source details may need to be read ag
 
 `Session.contextCheckpoint` contains version 1, covered prefix turn IDs, summary and summary model
 call ID. Reuse verifies that it still matches a terminal prefix of the Session. Raw turns remain
-available unchanged. Checkpoints are in-memory only in this phase: process restart loses them.
-List/resume CLI commands, disk persistence and rewind remain Phase 4.
+available unchanged. Phase 2 originally kept checkpoints in memory. Phase 4 now persists them, along with committed compaction usage, through SessionStore. Resume restores the checkpoint; rewind invalidates it if covered turns are removed. See PHASE-4.md.
 
 `ContextError` surfaces normalized `invalid_state`, `source_failed`, `budget_exceeded` or
 `compaction_failed`. Cancellation/deadline use the existing normalized sampling error contract.

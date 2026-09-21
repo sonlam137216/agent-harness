@@ -120,7 +120,7 @@ describe('SessionRuntime', () => {
     await tracing.forceFlush();
 
     expect(result).toMatchObject({ outcome: 'completed', iterations: 1, finalText: 'Done.' });
-    expect(result.session.turns).toEqual([
+    expect(result.session.turns).toMatchObject([
       {
         id: result.turnId,
         status: 'completed',
@@ -135,12 +135,13 @@ describe('SessionRuntime', () => {
       },
     ]);
     await expect(store.get(result.session.id)).resolves.toBe(result.session);
-    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenCalledTimes(3);
     expect(sampler.options[0]?.signal).toBeInstanceOf(AbortSignal);
     expect(sampler.options[0]?.deadlineMs).toBe(deadlineMs);
 
     const spans = exporter.getFinishedSpans();
     const sessionSpan = findSpan(spans, 'session.run');
+    expect(result.session.turns[0]?.traceId).toBe(sessionSpan.spanContext().traceId);
     const turnSpan = findSpan(spans, 'turn.run');
     const iterationSpan = findSpan(spans, 'agent.loop.iteration');
     const contextSpan = findSpan(spans, 'context.build');

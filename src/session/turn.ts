@@ -4,7 +4,7 @@ import type {
   ToolResult as NormalizedToolResult,
 } from '../tools/tool-types.js';
 
-export type TurnStatus = 'in_progress' | 'completed' | 'failed' | 'cancelled';
+export type TurnStatus = 'in_progress' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
 
 export interface UserMessage {
   readonly kind: 'user_message';
@@ -32,4 +32,5 @@ export interface Turn {
   readonly id: TurnId;
   readonly status: TurnStatus;
   readonly entries: readonly TurnEntry[];
+  readonly traceId?: string;
 }

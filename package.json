@@ -14,9 +14,10 @@
     "format:check": "prettier --check src test package.json tsconfig.json eslint.config.mjs prettier.config.mjs",
     "lint": "eslint .",
     "smoke": "vitest run test/cli/phase-one-cli.test.ts",
+    "smoke:persistence": "pnpm build && node dist/test/smoke/persistent-session.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "validate": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+    "validate": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm smoke:persistence"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",

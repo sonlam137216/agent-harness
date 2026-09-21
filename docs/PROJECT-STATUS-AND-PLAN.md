@@ -2,7 +2,7 @@
 
 Ngày đánh giá: 20/09/2026.
 
-Ghi chú: phần đánh giá bên dưới là snapshot trước triển khai Phase 2. Phase 2 sau đó đã được triển khai theo yêu cầu; trạng thái hiện hành xem ROADMAP.md và CONTEXT-ENGINE.md.
+Ghi chú: phần đánh giá bên dưới là snapshot lịch sử trước triển khai Phase 2. Phase 2–5 sau đó đã được triển khai theo ROADMAP.md; trạng thái hiện hành xem CONTEXT-ENGINE.md, PHASE-3.md, PHASE-4.md và PHASE-5.md. Đề xuất ghi file/chạy lệnh ở mục kế hoạch Phase 3 bên dưới chưa được đưa vào checklist roadmap và chưa được triển khai.
 
 ## Kết luận
 

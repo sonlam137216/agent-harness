@@ -171,12 +171,12 @@ export class ContextBuilder {
         let prunedResults = 0;
         let compactedTurns = 0;
 
-        // The active turn, rules, instructions and schemas are mandatory, even on overflow.
+        // The active turn, rules, selected skills, instructions and schemas are mandatory.
         const activeMessages = input.session.turns.at(-1)!.entries.map(toModelMessage);
         if (total(activeMessages) > inputLimit)
           throw new ContextError(
             'budget_exceeded',
-            'Required context exceeds the input budget; reduce the current turn, rules or tool schemas.',
+            'Required context exceeds the input budget; reduce the current turn, rules, selected skills or tool schemas.',
           );
 
         const projected = new Map(
@@ -243,7 +243,21 @@ export class ContextBuilder {
                   sampler,
                   this.tracer,
                 );
-                session = { ...session, contextCheckpoint: checkpoint };
+                session = {
+                  ...session,
+                  contextCheckpoint: checkpoint,
+                  usage: [
+                    ...(session.usage ?? []),
+                    {
+                      modelCallId: checkpoint.modelCallId,
+                      turnId: input.turnId,
+                      modelId: input.agent.model.modelId,
+                      purpose: 'compaction',
+                      tokens: checkpoint.usage!,
+                      stopReason: 'end_turn',
+                    },
+                  ],
+                };
                 messages = compose();
                 if (total(messages) >= previousTokens)
                   throw new ContextError(

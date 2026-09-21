@@ -147,7 +147,7 @@ Phase 1 records structural message and tool counts. Phase 2 records estimated so
 input/window/output budgets, baseline versus final context size, pruned result counts and checkpoint
 reuse. Estimates are explicitly marked and are not provider-reported token usage. Failed budget
 checks also retain safe baseline accounting. Names for skills/memory/retrieval below remain future
-attributes until those sources exist.
+attributes until those sources exist; Phase 5 now implements `context.skills_tokens`.
 
 Phase 2 additional attributes:
 
@@ -521,3 +521,60 @@ workspace.operation span
 The Phase 1 CLI uses this existing hierarchy and adds no presentation-specific span. Its real-provider entry point uses the console exporter, while the credential-free smoke path injects an in-memory exporter and verifies the same session → model → tool → workspace hierarchy. Final answer text is presentation output, not a trace attribute.
 
 Tracing initialization and exporter failures must be contained, with a no-op fallback when setup cannot complete. Phase 1 verifies that observability failures do not alter real turn outcomes. If this foundation is present from the start, later MCP, retrieval, memory, subagents, and compaction can attach naturally to the same trace tree.
+
+
+## Phase 3 instrumentation
+
+`permission.evaluate` is a child of `tool.execute`, with session/turn/model/tool call IDs,
+`permission.mode`, `permission.decision`, `permission.allowed`, `permission.reason`, and duration.
+The parent tool span carries the same decision metadata. An ask decision and its resolved approval
+are separate attributes; a deny is a policy outcome, not a broken evaluator.
+
+`hook.run` is emitted when a registry constructed with a tracer has matching callbacks. It records
+hook name/count, applicable correlation IDs, duration, success and normalized error type. It never
+records hook inputs or exception text. The CLI wires this tracer. Post-tool and TurnEnd notification
+failures also set `hook.post_tool_failed` / `hook.turn_end_failed` on the owning spans without losing
+an executed result.
+
+The tracing event subscriber adds metadata-only OpenTelemetry events to the active existing span.
+It never serializes the RuntimeEvent object, SessionUpdated transcript, tool arguments, model text,
+or approval payload, and does not create a second span for a model/tool call. Started/completed
+model and tool facts include normalized success, including failure and cancellation paths. Model
+facts concern normal AgentLoop sampling; Context retains its own compaction tracing.
+
+Persistence is the required SessionUpdated subscriber. Its failures surface with a retained cause;
+ordinary event observer failures and timeouts are contained. No metrics backend or durable event
+log is introduced in Phase 3.
+
+
+## Phase 4 persistence correlation
+
+`session.store` owns get/save/list timing for the file adapter. It records `session.store.operation`,
+`session.id` where applicable, `success`, `error.type`, and `duration_ms`. Errors preserve causes for
+callers but raw errors, storage paths and JSON payloads are excluded from tracing. `session.rewind`
+records session ID and retained-turn count. Lock contention is surfaced within the calling runtime's
+`session.run` span. No duplicate model/tool spans are created.
+
+Each new Turn stores the session-run trace ID, while assistant entries, tool entries and usage records
+retain their existing model/tool/turn identities. Resume creates a new trace for a new turn under the
+same durable session ID. SessionUpdated now also carries progress after a committed context build,
+each assistant response and each tool result. The tracing subscriber still serializes only metadata.
+
+Normalized usage records for committed response/compaction calls are persisted in Session, separate
+from estimated context accounting. Rewind removes usage belonging to removed turns; these totals are
+retained-history statistics, not a complete billing ledger. See PHASE-4.md for failure limits.
+
+## Phase 5 skill instrumentation
+
+`context.skills` is nested under `context.build` and carries `session.id`, `turn.id` and
+`model_call.id`. Discovery reads use existing `workspace.operation` spans. It records
+`skills.discovered_count`, `skills.catalog_count`, `skills.selected_count`, `skills.bytes_read`,
+`skills.injected_bytes`, `skills.automatic_enabled`, `duration_ms`, `success` and normalized
+`error.type` on failure. Counts include shadowed files in discovery and exclude them from the catalog.
+
+The `skills.selected` span event records explicit and automatic counts. `skills.injected` records
+the count and bytes of the source contribution, before the enclosing builder verifies the complete
+request budget. A successful source span alone does not imply model sampling occurred.
+`context.build` accounts for the full contribution with `context.skills_tokens`, including labels.
+Names, paths, descriptions, bodies, prompts and raw filesystem errors are excluded from traces.
+Selection and injection do not create runtime lifecycle events or duplicate model/tool spans.

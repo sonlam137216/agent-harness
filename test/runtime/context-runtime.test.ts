@@ -14,6 +14,12 @@ import { createTracing, type TracingHandle } from '../../src/observability/traci
 import { AgentLoop } from '../../src/runtime/agent-loop.js';
 import { SessionRuntime } from '../../src/runtime/session-runtime.js';
 import { InMemorySessionStore } from '../../src/session/in-memory-session-store.js';
+import type { SessionStore } from '../../src/session/session-store.js';
+import { FileSessionStore } from '../../src/session/file-session-store.js';
+import { LocalRecordStorage } from '../../src/workspace/local-record-storage.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Session } from '../../src/session/session.js';
 import { ToolBridge } from '../../src/tools/tool-bridge.js';
 import { ToolRegistry } from '../../src/tools/tool-registry.js';
@@ -65,9 +71,9 @@ describe('Context through SessionRuntime', () => {
   afterEach(async () => {
     await tracing.shutdown();
   });
-  function runtime(sampler: Sampler): SessionRuntime {
+  function runtime(sampler: Sampler, targetStore: SessionStore = store): SessionRuntime {
     return new SessionRuntime({
-      sessionStore: store,
+      sessionStore: targetStore,
       tracer: tracing.tracer,
       agentLoop: new AgentLoop({
         sampler,
@@ -81,6 +87,59 @@ describe('Context through SessionRuntime', () => {
       }),
     });
   }
+
+  it('persists compaction usage and reuses the checkpoint after reopening the file store', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'durable-context-'));
+    try {
+      const reopen = () => new FileSessionStore(new LocalRecordStorage(directory), tracing.tracer);
+      const initial = history();
+      await reopen().save(initial);
+      let summaries = 0;
+      const sampler: Sampler = {
+        sample: (request) => {
+          if (isSummary(request)) {
+            summaries += 1;
+            return Promise.resolve(answer(request, 'Preserve SQLite.'));
+          }
+          expect(JSON.stringify(request.messages)).toContain('Preserve SQLite.');
+          return Promise.resolve(answer(request, 'Continued.'));
+        },
+      };
+      const firstRuntime = runtime(sampler, reopen());
+      const first = await firstRuntime.run({
+        agent,
+        sessionId: initial.id,
+        tools: [],
+        prompt: 'Continue.',
+      });
+      firstRuntime.dispose();
+      const checkpoint = first.session.contextCheckpoint;
+      expect(checkpoint).toBeDefined();
+      expect(first.session.usage?.filter((record) => record.purpose === 'compaction')).toHaveLength(
+        summaries,
+      );
+      expect(
+        first.session.usage?.find((record) => record.modelCallId === checkpoint?.modelCallId)
+          ?.tokens,
+      ).toEqual({ inputTokens: 100, outputTokens: 30 });
+      const secondRuntime = runtime(sampler, reopen());
+      const second = await secondRuntime.run({
+        agent,
+        sessionId: initial.id,
+        tools: [],
+        prompt: 'Next.',
+      });
+      secondRuntime.dispose();
+      expect(second.session.contextCheckpoint).toEqual(checkpoint);
+      expect(second.session.usage?.filter((record) => record.purpose === 'response')).toHaveLength(
+        2,
+      );
+      expect(await reopen().get(initial.id)).toEqual(second.session);
+      expect(second.session.turns.slice(0, initial.turns.length)).toEqual(initial.turns);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 
   it('continues a long multi-turn session using saved checkpoints while retaining every original entry', async () => {
     let summaries = 0;

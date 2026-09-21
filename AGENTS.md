@@ -19,11 +19,17 @@ If code and documentation disagree, stop and update the architecture intentional
 
 ## Current Phase
 
-The repository has completed **Phase 2 — Context Engine**.
+The repository has completed **Phase 5 — Skills**.
 
 Phase 1 core and its read-only CLI are complete, including OpenAI Responses, Anthropic Messages, and Ollama Chat adapters. Phase 2 adds budget-aware context sources, scoped project rules, historical tool-result pruning, and model-assisted compaction with in-memory checkpoints. See `docs/CONTEXT-ENGINE.md` for the current contract and limits.
 
-Implement one roadmap capability at a time. Do not start Phase 3 or another capability until explicitly requested. File mutation, command execution, durable sessions, hooks, and events remain unavailable.
+Phase 3 replaces the read-only bridge guard with explicit permissions, adds seven lifecycle hooks, and connects canonical events to in-memory persistence and tracing. See `docs/PHASE-3.md`.
+
+Phase 4 adds a versioned file session store, durable transcript/checkpoints/usage, resume/list/inspect/rewind CLI commands and per-session exclusive operations. See `docs/PHASE-4.md`.
+
+Phase 5 adds bounded project/user skill discovery, explicit and opt-in automatic selection, and budgeted context injection. See `docs/PHASE-5.md`.
+
+Implement one roadmap capability at a time. Do not start Phase 6 or another capability until explicitly requested. Native file mutation and command execution remain unavailable.
 
 Do not implement advanced capabilities before the core end-to-end loop works.
 
@@ -43,7 +49,7 @@ Unless explicitly requested, do not implement:
 ### Runtime
 
 - `SessionRuntime` owns session-level orchestration around one synchronous `AgentLoop` run.
-- `SessionRuntime` creates or loads session state, creates one turn, and persists the turn before and after loop execution.
+- `SessionRuntime` creates or loads session state, creates one turn, and persists the turn before/after loop execution and at model/tool progress boundaries.
 - Concurrency control, queues, background work, actor semantics, and mailboxes are not part of the Phase 1 `SessionRuntime`.
 - `AgentLoop` owns the model → tool → model iteration.
 - `Turn` is session state; Runtime coordinates it but does not define a second turn model.
@@ -66,7 +72,7 @@ Unless explicitly requested, do not implement:
 
 - `ToolBridge` is the single runtime entry point for tool execution.
 - Tools are registered through a registry.
-- A permission decision must occur before any mutating tool executes. Hooks are added later according to the roadmap.
+- A permission decision must occur before any mutating tool executes. Phase 3 hooks cannot override that decision.
 - Tracing and result normalization wrap tool execution.
 - Tools should depend on Workspace interfaces rather than Node.js filesystem/process APIs directly.
 

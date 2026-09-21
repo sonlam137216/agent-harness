@@ -1,5 +1,5 @@
 import type { AgentDefinition } from '../agent/agent-definition.js';
-import type { TurnId } from '../ids.js';
+import type { ModelCallId, TurnId } from '../ids.js';
 import type { ModelMessage, ModelToolDefinition } from '../model/sampling-types.js';
 import type { Session } from '../session/session.js';
 import type { Turn, TurnEntry } from '../session/turn.js';
@@ -9,6 +9,7 @@ export interface ContextSourceInput {
   readonly agent: AgentDefinition;
   readonly session: Session;
   readonly turnId: TurnId;
+  readonly modelCallId?: ModelCallId;
   readonly tools: readonly ModelToolDefinition[];
   readonly signal?: AbortSignal;
   readonly deadlineMs?: number;

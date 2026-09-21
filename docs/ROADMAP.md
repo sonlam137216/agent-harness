@@ -110,7 +110,7 @@ No separate `ChatState` is introduced until it has a responsibility distinct fro
 
 `SessionRuntime` creates or loads session state, creates one user turn, delegates to `AgentLoop`, persists the result, and owns the top-level trace spans. It intentionally has no actor, mailbox, queue, background-processing, or concurrency-management semantics.
 
-At-most-one-active-turn enforcement is deferred until a concurrent API or interactive runtime exists; it must be added as its own capability rather than hidden inside the Phase 1 synchronous coordinator.
+Phase 1 had no active-turn concurrency enforcement. Phase 4 adds explicit session-scoped exclusive operations for separate CLI processes, without introducing an actor or queue.
 
 ## CLI
 
@@ -203,7 +203,7 @@ is possible from the CLI and fully traceable. Mutating files and running command
 
 Goal: make model context explicit and budget-aware.
 
-Implemented with an asynchronous ContextBuilder, replaceable token estimation, Workspace-backed scoped rules, projection-only pruning, and bounded Sampler summaries. Checkpoints remain in memory; no Phase 3–12 capabilities are enabled. See [CONTEXT-ENGINE.md](CONTEXT-ENGINE.md).
+Implemented with an asynchronous ContextBuilder, replaceable token estimation, Workspace-backed scoped rules, projection-only pruning, and bounded Sampler summaries. Phase 2 originally kept checkpoints in memory; Phase 4 now persists them through SessionStore. See [CONTEXT-ENGINE.md](CONTEXT-ENGINE.md).
 
 - [x] extend the Phase 1 `ContextBuilder`
 - [x] `ContextSource` abstraction
@@ -229,35 +229,37 @@ Exit criteria:
 
 Goal: make execution controllable and extensible.
 
+Implemented; see [PHASE-3.md](PHASE-3.md) for rule matching, mode defaults, approval, lifecycle failure contracts, and CLI examples. The native tool registry remains read-only. The older planning document proposed workspace mutation as an extension; that proposal is not part of this phase checklist. File editing and command execution still need their own explicitly requested workspace/tool slices.
+
 ## Permissions
 
-- [ ] `PermissionEngine`
-- [ ] replace the Phase 1 inline read-only guard with explicit permission decisions
-- [ ] `AccessKind`
-- [ ] allow rules
-- [ ] ask rules
-- [ ] deny rules
-- [ ] `deny > ask > allow`
-- [ ] modes: ask / auto / always-approve
+- [x] `PermissionEngine`
+- [x] replace the Phase 1 inline read-only guard with explicit permission decisions
+- [x] `AccessKind`
+- [x] allow rules
+- [x] ask rules
+- [x] deny rules
+- [x] `deny > ask > allow`
+- [x] modes: ask / auto / always-approve
 
 ## Hooks
 
-- [ ] hook registry
-- [ ] `SessionStart`
-- [ ] `TurnStart`
-- [ ] `BeforeModel`
-- [ ] `AfterModel`
-- [ ] `PreToolUse`
-- [ ] `PostToolUse`
-- [ ] `TurnEnd`
+- [x] hook registry
+- [x] `SessionStart`
+- [x] `TurnStart`
+- [x] `BeforeModel`
+- [x] `AfterModel`
+- [x] `PreToolUse`
+- [x] `PostToolUse`
+- [x] `TurnEnd`
 
 ## Events
 
-- [ ] one canonical runtime event model and event bus
-- [ ] model lifecycle events
-- [ ] tool lifecycle events
-- [ ] persistence subscriber
-- [ ] tracing subscriber
+- [x] one canonical runtime event model and event bus
+- [x] model lifecycle events
+- [x] tool lifecycle events
+- [x] persistence subscriber
+- [x] tracing subscriber
 
 Session and Runtime must not define duplicate event types for the same lifecycle fact.
 
@@ -272,15 +274,17 @@ Exit criteria:
 
 Goal: resume and inspect agent work.
 
-- [ ] file or SQLite session store
-- [ ] session metadata
-- [ ] conversation persistence
-- [ ] tool-call persistence
-- [ ] token usage persistence
-- [ ] resume session
-- [ ] session list
-- [ ] basic rewind of conversation state
-- [ ] trace/session correlation
+Implemented with versioned JSON records, atomic filesystem replacement, exclusive session operations, durable progress snapshots and CLI resume/list/show/rewind. See [PHASE-4.md](PHASE-4.md) for recovery, usage and locking limits. `pnpm smoke:persistence` verifies restart/resume in separate processes without a live provider.
+
+- [x] file or SQLite session store
+- [x] session metadata
+- [x] conversation persistence
+- [x] tool-call persistence
+- [x] token usage persistence
+- [x] resume session
+- [x] session list
+- [x] basic rewind of conversation state
+- [x] trace/session correlation
 
 Exit criteria:
 
@@ -295,14 +299,18 @@ Exit criteria:
 
 Goal: support reusable procedural knowledge.
 
-- [ ] `SKILL.md` parser
-- [ ] project skill discovery
-- [ ] user skill discovery
-- [ ] skill precedence
-- [ ] explicit skill invocation
-- [ ] skill context injection
-- [ ] optional automatic skill selection
-- [ ] trace skill selection/injection
+- [x] `SKILL.md` parser
+- [x] project skill discovery
+- [x] user skill discovery
+- [x] skill precedence
+- [x] explicit skill invocation
+- [x] skill context injection
+- [x] optional automatic skill selection
+- [x] trace skill selection/injection
+
+Implemented through a Workspace-backed ContextSource, with project-over-user precedence,
+turn-scoped `$name` / `--skill` invocation, opt-in lexical selection, bounded discovery and full
+context-budget accounting. See [PHASE-5.md](PHASE-5.md) for format and selection limits.
 
 Exit criteria:
 

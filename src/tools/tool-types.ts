@@ -1,7 +1,8 @@
 import type { ToolCallId } from '../ids.js';
 import type { JsonObject, JsonValue } from '../json.js';
 
-export type ToolAccessKind = 'read' | 'write' | 'execute' | 'external';
+import type { AccessKind } from '../permissions/access-kind.js';
+export type ToolAccessKind = AccessKind;
 
 export interface ModelToolDefinition {
   readonly name: string;
@@ -11,6 +12,7 @@ export interface ModelToolDefinition {
 
 export interface ToolDefinition extends ModelToolDefinition {
   readonly accessKind: ToolAccessKind;
+  readonly destructive?: boolean;
 }
 
 export interface ToolCall {
