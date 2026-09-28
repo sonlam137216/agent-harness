@@ -452,7 +452,11 @@ The initial tool runtime foundation defines one provider-neutral `Tool` contract
 
 `ToolBridge` is the single entry point from Runtime to Tools. Its Phase 1 execution context requires session, turn, and originating model-call correlation IDs and optionally carries an `AbortSignal`. It resolves tools only through `ToolRegistry`, validates with the selected tool's input validator, and emits one `tool.execute` span.
 
-Phase 1 permits only tools classified as `read`; other access kinds return `access_denied` without dispatch. This is a narrow bootstrap guard, not the Phase 3 permission engine or an approval flow. Tool operations are never retried by the bridge.
+Phase 1 used an inline read-only guard. Phase 3 replaced it with PermissionEngine:
+validated immutable calls pass through PreToolUse and explicit authorization before
+dispatch. Default auto mode allows reads and denies unmatched non-read calls;
+deny rules override ask/allow and destructive calls require approval. Tool operations
+are never retried by the bridge.
 
 Unknown tools, invalid arguments, cancellation, mismatched result correlation, and unexpected thrown failures become bounded structured `ToolResult` failures. Trace attributes include correlation IDs and safe structural classification only; raw arguments, outputs, and exception messages are not recorded.
 
@@ -486,7 +490,8 @@ PostToolUse Hooks (Phase 3)
 ToolResult
 ```
 
-`PreToolUse` hooks must not perform effects before authorization. If a hook transforms tool arguments, ToolBridge must validate and authorize the transformed call before dispatch.
+`PreToolUse` hooks must not perform effects before authorization. Current hooks
+receive immutable snapshots and cannot transform tool arguments or override permissions.
 
 Phase 1 built-in tools:
 
@@ -494,7 +499,7 @@ Phase 1 built-in tools:
 - `list_files`
 - `search_text`
 
-`ToolBridge` owns this dispatch pipeline; do not add a separate executor until a distinct execution responsibility appears. Phase 1's inline access guard rejects every non-read tool before dispatch. `write_file`/`apply_patch` and `run_command` remain unavailable until their workspace capability and explicit permission-decision slices are implemented. Full rules, approval flows, and hooks arrive in Phase 3.
+`ToolBridge` owns this dispatch pipeline; do not add a separate executor until a distinct execution responsibility appears. Phase 3 rules, approval flows and hooks are implemented. `write_file`/`apply_patch` and `run_command` remain unavailable until their workspace/tool slices are explicitly requested and implemented.
 
 The `Tool` contract accepts a normalized `ToolCall` plus optional cancellation and returns a normalized `ToolResult`. Native tools validate their own input contract and convert capability failures into bounded structured failures. `ToolBridge` rejects invalid calls before dispatch and normalizes registry, access, or unexpected pipeline failures while preserving this canonical result shape.
 
@@ -565,14 +570,32 @@ Command `cwd` containment is not an OS sandbox. An authorized child process may 
 
 ### 4.8 MCP
 
+Phase 6 implementation decision: the official MCP client SDK is confined to an
+adapter in this module. Workspace owns a bounded line-oriented duplex subprocess
+capability for stdio; HTTP uses the SDK with a bounded fetch adapter. No model-facing
+command tool is added. Explicit CLI configuration owns startup and teardown.
+
+ToolRegistry supports atomic replacement of hidden external registrations.
+ToolBridge supports one protocol-neutral delegation hop: validate/hook/authorize the
+wrapper, resolve a registered target, validate/hook/authorize that target, check its
+pinned registration is current, then execute once. One logical call ID and lifecycle
+pair are retained; PostToolUse runs for the executed target only. Wrapper grants
+never replace target authorization. External tools remain accessKind=external.
+
+The catalog publishes immutable generations with qualified names and compiled JSON
+Schema validators. Search uses BM25 over names/descriptions and returns bounded
+complete schemas. See [PHASE-6.md](PHASE-6.md) for the supported schema subset and limits. Only search_tools and invoke_tool enter permanent model definitions.
+Refresh invalidates stale targets before discovery and atomically publishes replacements.
+Reconnect is demand-driven, bounded, and never replays tools/call. SDK types do not
+cross into Runtime, Session or Sampler. See PHASE-6-PLAN.md for preparation history.
+
 ```text
 src/mcp/
-├── mcp-manager.ts
+├── config.ts
+├── mcp-manager.ts        # composition of search_tools and invoke_tool
 ├── mcp-client.ts
 ├── tool-catalog.ts
-├── tool-index.ts
-├── search-tools.tool.ts
-└── invoke-tool.tool.ts
+└── tool-index.ts
 ```
 
 MCP is an external integration layer.
@@ -605,7 +628,7 @@ relevant tools + schemas
         │
         ▼
 invoke_tool(
-  "linear__search_issues",
+  "mcp:linear:search_issues",
   {...}
 )
 ```
@@ -756,7 +779,9 @@ deny > ask > allow
 
 Permissions are enforced by the harness, not the model.
 
-Phase 1 has no mutating capabilities and keeps a narrow inline ToolBridge guard that rejects non-read access kinds. Phase 3 introduces this subsystem before any mutating tool becomes executable, adding explicit decisions, rule composition, ask flows, modes, and richer policy evaluation.
+Phase 1 had a narrow inline ToolBridge guard rejecting non-read access kinds.
+Phase 3 replaced it with this subsystem: explicit decisions, rule composition,
+ask flows and modes are implemented. Native tool registration still remains read-only.
 
 ---
 

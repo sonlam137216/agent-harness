@@ -10,5 +10,7 @@ import type {
 export interface Tool {
   readonly definition: ToolDefinition;
   readonly validateInput: (input: JsonObject) => ToolInputValidation;
+  /** Pure, one-hop delegation to an already registered tool. */
+  readonly resolveInvocation?: (call: ToolCall) => ToolCall;
   readonly execute: (call: ToolCall, options?: ToolExecutionOptions) => Promise<ToolResult>;
 }

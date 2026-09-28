@@ -2,6 +2,17 @@
 
 Ngày đánh giá: 20/09/2026.
 
+Cập nhật 28/09/2026: đánh giá working tree Phase 0–6 và đề xuất Phase 7 tại
+[PHASE-7-PLAN.md](PHASE-7-PLAN.md). `pnpm validate` đạt 37 test files / 237 tests,
+build và smoke persistence. Phase 7 chưa được triển khai.
+
+Cập nhật 23/09/2026: Phase 6 đã triển khai; xem [PHASE-6.md](PHASE-6.md)
+cho cấu hình MCP, permissions theo tool đích, tìm kiếm catalog và giới hạn hiện tại.
+
+Snapshot 22/09/2026: Phase 0–5 đã hoàn thành; `pnpm validate` đạt 35 test files /
+215 tests và smoke restart/persistence. Đánh giá hiện tại và kế hoạch chuẩn bị
+Phase 6 xem [PHASE-6-PLAN.md](PHASE-6-PLAN.md). Nội dung bên dưới được giữ làm lịch sử.
+
 Ghi chú: phần đánh giá bên dưới là snapshot lịch sử trước triển khai Phase 2. Phase 2–5 sau đó đã được triển khai theo ROADMAP.md; trạng thái hiện hành xem CONTEXT-ENGINE.md, PHASE-3.md, PHASE-4.md và PHASE-5.md. Đề xuất ghi file/chạy lệnh ở mục kế hoạch Phase 3 bên dưới chưa được đưa vào checklist roadmap và chưa được triển khai.
 
 ## Kết luận

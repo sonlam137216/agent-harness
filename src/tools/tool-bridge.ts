@@ -58,6 +58,7 @@ export class ToolBridge {
       const call = snapshot(requestedCall);
       let finalResult: ToolResult | undefined;
       let dispatched = false;
+      let effectiveCall = call;
       const correlation = {
         sessionId: context.sessionId,
         turnId: context.turnId,
@@ -98,72 +99,112 @@ export class ToolBridge {
           );
         }
 
-        const tool = this.registry.get(call.name);
-        if (tool === undefined) {
+        let tool = this.registry.get(call.name);
+        if (tool === undefined || this.registry.isHidden(call.name)) {
           return complete(
             toolFailure(call.id, 'unknown_tool', 'No registered tool matches this call.'),
             'unknown_tool',
           );
         }
 
-        span.setAttribute('tool.access_kind', tool.definition.accessKind);
+        // A routing tool can delegate once; all decisions stay in this pipeline.
+        for (let hop = 0; hop < 2; hop += 1) {
+          span.setAttribute('tool.access_kind', tool.definition.accessKind);
+          span.setAttribute('tool.kind', tool.definition.origin ?? 'native');
+          span.setAttribute('tool.effective_name', safeToolName(effectiveCall.name));
 
-        const validation = tool.validateInput(call.arguments);
-        if (!validation.valid) {
+          const validation = tool.validateInput(effectiveCall.arguments);
+          if (!validation.valid) {
+            return complete(
+              toolFailure(call.id, 'invalid_input', validation.message),
+              'invalid_input',
+            );
+          }
+
+          await this.options.hooks?.run(
+            { name: 'PreToolUse', ...correlation, call: effectiveCall },
+            context.signal,
+          );
+          const definition = tool.definition;
+          const permission = await this.tracer.startActiveSpan(
+            'permission.evaluate',
+            async (permissionSpan) => {
+              const permissionStartedAt = performance.now();
+              permissionSpan.setAttributes({
+                'session.id': context.sessionId,
+                'turn.id': context.turnId,
+                'model_call.id': context.modelCallId,
+                'tool_call.id': call.id,
+                'permission.mode': this.#permissions.mode,
+                'permission.tool_name': safeToolName(effectiveCall.name),
+              });
+              try {
+                const resolution = await this.#permissions.authorize(
+                  {
+                    ...correlation,
+                    call: effectiveCall,
+                    accessKind: definition.accessKind,
+                    ...(definition.destructive === undefined
+                      ? {}
+                      : { destructive: definition.destructive }),
+                  },
+                  context.signal,
+                );
+                const attributes = {
+                  'permission.mode': this.#permissions.mode,
+                  'permission.decision': resolution.decision,
+                  'permission.reason': resolution.reason,
+                  'permission.allowed': resolution.allowed,
+                };
+                span.setAttributes(attributes);
+                permissionSpan.setAttributes(attributes);
+                return resolution;
+              } finally {
+                permissionSpan.setAttribute('duration_ms', performance.now() - permissionStartedAt);
+                permissionSpan.end();
+              }
+            },
+          );
+          if (!permission.allowed || isAborted(context.signal)) {
+            const code = isAborted(context.signal) ? 'cancelled' : 'access_denied';
+            return complete(toolFailure(call.id, code, 'Tool execution was not authorized.'), code);
+          }
+
+          if (tool.resolveInvocation === undefined) break;
+          if (hop !== 0)
+            return complete(
+              toolFailure(call.id, 'invalid_delegation', 'Nested delegation is unavailable.'),
+            );
+          const resolved = snapshot(tool.resolveInvocation(effectiveCall));
+          const target = this.registry.get(resolved.name);
+          if (
+            resolved.id !== call.id ||
+            target === undefined ||
+            !this.registry.isHidden(resolved.name) ||
+            target.resolveInvocation !== undefined
+          ) {
+            return complete(
+              toolFailure(call.id, 'stale_target', 'Search again for an available target.'),
+            );
+          }
+          effectiveCall = resolved;
+          tool = target;
+        }
+        if (this.registry.get(effectiveCall.name) !== tool) {
           return complete(
-            toolFailure(call.id, 'invalid_input', validation.message),
-            'invalid_input',
+            toolFailure(
+              call.id,
+              'stale_target',
+              'The target changed during authorization; search again.',
+            ),
           );
         }
-
-        await this.options.hooks?.run({ name: 'PreToolUse', ...correlation, call }, context.signal);
-        const permission = await this.tracer.startActiveSpan(
-          'permission.evaluate',
-          async (permissionSpan) => {
-            const permissionStartedAt = performance.now();
-            permissionSpan.setAttributes({
-              'session.id': context.sessionId,
-              'turn.id': context.turnId,
-              'model_call.id': context.modelCallId,
-              'tool_call.id': call.id,
-              'permission.mode': this.#permissions.mode,
-            });
-            try {
-              const resolution = await this.#permissions.authorize(
-                {
-                  ...correlation,
-                  call,
-                  accessKind: tool.definition.accessKind,
-                  ...(tool.definition.destructive === undefined
-                    ? {}
-                    : { destructive: tool.definition.destructive }),
-                },
-                context.signal,
-              );
-              const attributes = {
-                'permission.mode': this.#permissions.mode,
-                'permission.decision': resolution.decision,
-                'permission.reason': resolution.reason,
-                'permission.allowed': resolution.allowed,
-              };
-              span.setAttributes(attributes);
-              permissionSpan.setAttributes(attributes);
-              return resolution;
-            } finally {
-              permissionSpan.setAttribute('duration_ms', performance.now() - permissionStartedAt);
-              permissionSpan.end();
-            }
-          },
-        );
-        if (!permission.allowed || isAborted(context.signal)) {
-          const code = isAborted(context.signal) ? 'cancelled' : 'access_denied';
-          return complete(toolFailure(call.id, code, 'Tool execution was not authorized.'), code);
-        }
-
-        const executionOptions: ToolExecutionOptions =
-          context.signal === undefined ? {} : { signal: context.signal };
+        const executionOptions: ToolExecutionOptions = {
+          correlation,
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
+        };
         dispatched = true;
-        const result = await tool.execute(call, executionOptions);
+        const result = await tool.execute(effectiveCall, executionOptions);
         if (result.toolCallId !== call.id) {
           return complete(
             toolFailure(
@@ -195,7 +236,7 @@ export class ToolBridge {
         if (dispatched && finalResult !== undefined) {
           try {
             await this.options.hooks?.run(
-              { name: 'PostToolUse', ...correlation, call, result: finalResult },
+              { name: 'PostToolUse', ...correlation, call: effectiveCall, result: finalResult },
               context.signal,
             );
           } catch {

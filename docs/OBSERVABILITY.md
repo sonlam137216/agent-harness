@@ -578,3 +578,22 @@ request budget. A successful source span alone does not imply model sampling occ
 `context.build` accounts for the full contribution with `context.skills_tokens`, including labels.
 Names, paths, descriptions, bodies, prompts and raw filesystem errors are excluded from traces.
 Selection and injection do not create runtime lifecycle events or duplicate model/tool spans.
+
+## Phase 6 external tools
+
+ToolBridge now records `tool.effective_name` alongside the requested `tool.name`,
+sets `tool.kind=external` for resolved external targets, and retains one logical
+call ID and ToolStarted/ToolCompleted pair. Delegation creates two permission spans,
+identified by `permission.tool_name`: wrapper approval does not grant target approval.
+PostToolUse observes the executed target. Tool execution options carry neutral
+session/turn/model correlation to tool-owned child spans; native filesystem adapters
+continue to receive only their filesystem operation options.
+
+`mcp.search` records query length, catalog size, result count, duration and correlation.
+`mcp.call` records configured server alias, qualified tool identity, original tool-call
+ID, session/turn/model IDs, result byte count, duration and normalized success/failure.
+Both nest beneath `tool.execute`. `workspace.operation` with `operation=process.open`
+records the stdio startup boundary without command, cwd, environment or stderr.
+Existing Context accounting includes search results in conversation tokens and only
+the stable meta-tool schemas in permanent tool tokens. No second model span, event
+model, telemetry backend or payload logging is introduced.

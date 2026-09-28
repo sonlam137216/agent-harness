@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { McpError } from '../mcp/config.js';
 import { FileSessionStore } from '../session/file-session-store.js';
 import { SessionFormatError } from '../session/session-codec.js';
 import { SessionStateError } from '../session/session-history.js';
@@ -17,6 +18,7 @@ import { CLI_HELP, CliRunError, CliUsageError, runPhaseOneCli } from './phase-on
 function safeErrorMessage(error: unknown): string {
   if (error instanceof EventSubscriberError) return safeErrorMessage(error.cause);
   if (
+    error instanceof McpError ||
     error instanceof SessionFormatError ||
     error instanceof SessionStateError ||
     error instanceof RecordStorageError ||
@@ -60,6 +62,7 @@ async function main(): Promise<void> {
     process.once('SIGINT', cancel);
     await runPhaseOneCli({
       ...parsed.config,
+      environment: process.env,
       sessionStore: store,
       provider: parsed.provider,
       ...(command.resumeId === undefined ? {} : { sessionId: command.resumeId }),

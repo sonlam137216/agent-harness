@@ -19,7 +19,7 @@ If code and documentation disagree, stop and update the architecture intentional
 
 ## Current Phase
 
-The repository has completed **Phase 5 — Skills**.
+The repository has completed **Phase 6 — MCP and Dynamic Tool Retrieval**.
 
 Phase 1 core and its read-only CLI are complete, including OpenAI Responses, Anthropic Messages, and Ollama Chat adapters. Phase 2 adds budget-aware context sources, scoped project rules, historical tool-result pruning, and model-assisted compaction with in-memory checkpoints. See `docs/CONTEXT-ENGINE.md` for the current contract and limits.
 
@@ -29,7 +29,9 @@ Phase 4 adds a versioned file session store, durable transcript/checkpoints/usag
 
 Phase 5 adds bounded project/user skill discovery, explicit and opt-in automatic selection, and budgeted context injection. See `docs/PHASE-5.md`.
 
-Implement one roadmap capability at a time. Do not start Phase 6 or another capability until explicitly requested. Native file mutation and command execution remain unavailable.
+Phase 6 adds explicit MCP configuration, stdio/Streamable HTTP adapters, bounded BM25 catalog search, and target-authorized invocation. See `docs/PHASE-6.md`. Native tools remain read-only; Workspace owns only the application-side process capability needed for stdio.
+
+Implement one roadmap capability at a time. Do not start Phase 7 or another capability until explicitly requested. Native file mutation and command execution remain unavailable.
 
 Do not implement advanced capabilities before the core end-to-end loop works.
 

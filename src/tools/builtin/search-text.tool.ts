@@ -78,8 +78,9 @@ export class SearchTextTool implements Tool {
 
   public readonly execute = async (
     call: ToolCall,
-    options: ToolExecutionOptions = {},
+    execution: ToolExecutionOptions = {},
   ): Promise<ToolResult> => {
+    const options = execution.signal === undefined ? {} : { signal: execution.signal };
     const input = validateSearchTextInput(call.arguments);
     if (!input.valid) return invalidToolInput(call.id, input.message);
 

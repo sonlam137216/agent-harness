@@ -322,29 +322,33 @@ Exit criteria:
 
 Goal: scale to many external integrations without dumping all schemas into the model context.
 
+Implemented; see [PHASE-6.md](PHASE-6.md) for configuration, target authorization,
+stdio/Streamable HTTP, BM25 catalog search, refresh/recovery and bounded output.
+[PHASE-6-PLAN.md](PHASE-6-PLAN.md) preserves the original preparation proposal.
+
 ## MCP
 
-- [ ] MCP manager
-- [ ] stdio connection
-- [ ] HTTP/streamable connection
-- [ ] tool discovery
-- [ ] reconnect/error handling
-- [ ] result normalization
+- [x] MCP manager
+- [x] stdio connection
+- [x] HTTP/streamable connection
+- [x] tool discovery
+- [x] reconnect/error handling
+- [x] result normalization
 
 ## Tool Catalog
 
-- [ ] normalized external tool metadata
-- [ ] qualified names
-- [ ] collision handling
-- [ ] BM25 index
-- [ ] catalog refresh
+- [x] normalized external tool metadata
+- [x] qualified names
+- [x] collision handling
+- [x] BM25 index
+- [x] catalog refresh
 
 ## Model-facing meta-tools
 
-- [ ] `search_tools`
-- [ ] return relevant schemas
-- [ ] `invoke_tool`
-- [ ] route through permissions/hooks/tracing
+- [x] `search_tools`
+- [x] return relevant schemas
+- [x] `invoke_tool`
+- [x] route through permissions/hooks/tracing
 
 Exit criteria:
 

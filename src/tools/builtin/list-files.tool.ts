@@ -24,8 +24,9 @@ export class ListFilesTool implements Tool {
 
   public readonly execute = async (
     call: ToolCall,
-    options: ToolExecutionOptions = {},
+    execution: ToolExecutionOptions = {},
   ): Promise<ToolResult> => {
+    const options = execution.signal === undefined ? {} : { signal: execution.signal };
     const path = validateOptionalPath(call.arguments);
     if (!path.valid) return invalidToolInput(call.id, path.message);
 

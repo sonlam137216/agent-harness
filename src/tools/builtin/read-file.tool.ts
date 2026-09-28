@@ -25,8 +25,9 @@ export class ReadFileTool implements Tool {
 
   public readonly execute = async (
     call: ToolCall,
-    options: ToolExecutionOptions = {},
+    execution: ToolExecutionOptions = {},
   ): Promise<ToolResult> => {
+    const options = execution.signal === undefined ? {} : { signal: execution.signal };
     const path = validateRequiredPath(call.arguments);
     if (!path.valid) return invalidToolInput(call.id, path.message);
 

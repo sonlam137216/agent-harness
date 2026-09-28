@@ -1,4 +1,4 @@
-import type { ToolCallId } from '../ids.js';
+import type { ToolCallId, SessionId, TurnId, ModelCallId } from '../ids.js';
 import type { JsonObject, JsonValue } from '../json.js';
 
 import type { AccessKind } from '../permissions/access-kind.js';
@@ -13,6 +13,7 @@ export interface ModelToolDefinition {
 export interface ToolDefinition extends ModelToolDefinition {
   readonly accessKind: ToolAccessKind;
   readonly destructive?: boolean;
+  readonly origin?: 'native' | 'external';
 }
 
 export interface ToolCall {
@@ -24,6 +25,11 @@ export interface ToolCall {
 export type ToolResultOutcome = 'success' | 'error';
 
 export interface ToolExecutionOptions {
+  readonly correlation?: {
+    readonly sessionId: SessionId;
+    readonly turnId: TurnId;
+    readonly modelCallId: ModelCallId;
+  };
   readonly signal?: AbortSignal;
 }
 
