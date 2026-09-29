@@ -3,8 +3,9 @@
 Phase 9 lets a parent agent hand a self-contained task to a read-only child session and
 receive only a bounded report with its sources. Children can run in the foreground or in
 the background, are cancellable, are linked to the parent in traces and in the saved
-session, and cannot delegate further. Children that modify files need worktree isolation
-(Phase 10), and a test role needs command execution; neither is part of this phase.
+session, and cannot delegate further. Children that modify files use worktree isolation,
+added in Phase 10 as the `implement` role ([PHASE-10.md](PHASE-10.md)). A test role needs
+command execution and is not part of either phase.
 
 ## Problem and placement
 

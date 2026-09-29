@@ -6,23 +6,13 @@ import {
   type ToolCallId,
   type TurnId,
 } from '../ids.js';
-import type { SubagentRole } from './subagent-definition.js';
+import { SubagentError, type SubagentRole } from './subagent-definition.js';
 import type { SubagentHandoff, SubagentRunner } from './subagent-runner.js';
 
 export const DEFAULT_MAX_SUBAGENTS_PER_RUN = 8;
 export const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 4;
 
-export type SubagentErrorCode = 'subagent_limit' | 'subagent_busy' | 'unknown_subagent' | 'closed';
-
-export class SubagentError extends Error {
-  public override readonly name = 'SubagentError';
-  public constructor(
-    public readonly code: SubagentErrorCode,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+export { SubagentError, type SubagentErrorCode } from './subagent-definition.js';
 
 export interface SubagentStartRequest {
   readonly role: SubagentRole;
@@ -81,6 +71,11 @@ export class SubagentManager {
     if (signal?.aborted === true) close();
     else signal?.addEventListener('abort', close, { once: true });
     this.#unlinkSignal = () => signal?.removeEventListener('abort', close);
+  }
+
+  /** Roles this run can start; worktree roles need a configured worktree provider. */
+  public roles(): readonly SubagentRole[] {
+    return this.#runner.availableRoles();
   }
 
   /** Runs a child to completion; the caller's signal and manager closure both cancel it. */

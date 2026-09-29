@@ -48,16 +48,21 @@ foreground or background delegation, bounded report handoff with sources, parent
 trace and session linking, max depth 1, and capability, token and concurrency limits.
 See `docs/PHASE-9.md`.
 
-Implement one roadmap capability at a time. Phase 9 is complete; the next roadmap phase
-is Phase 10, worktrees. Do not start another capability until explicitly requested.
-Native file mutation and command execution remain unavailable.
+Phase 10 adds worktree isolation: with `--subagents --worktrees`, an `implement` child
+edits files (`write_file`, `edit_file`) only inside its own disposable Git worktree and
+branch; its work is committed when it ends, and the user reviews and applies it with
+`worktrees diff/apply/remove`. See `docs/PHASE-10.md`.
+
+Implement one roadmap capability at a time. Phase 10 is complete; the next roadmap phase
+is Phase 11, sandbox. Do not start another capability until explicitly requested.
+The model never writes the main working tree, and command execution remains unavailable.
 
 Do not implement advanced capabilities before the core end-to-end loop works.
 
 Unless explicitly requested, do not implement:
 
-- subagents that modify files (subagents are read-only)
-- worktrees
+- file mutation outside disposable worktrees
+- command execution
 - sandboxing
 - plugins
 - remote workspaces

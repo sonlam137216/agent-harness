@@ -484,12 +484,14 @@ Exit criteria:
 
 Goal: let independent agents modify code safely.
 
-- [ ] `GitWorktreeWorkspace`
-- [ ] create worktree
-- [ ] bind child session to worktree
-- [ ] inspect diff
-- [ ] apply/merge changes
-- [ ] cleanup lifecycle
+- [x] `GitWorktreeWorkspace` (Workspace capabilities bound to a worktree root + `GitWorktreeCapability`)
+- [x] create worktree (one branch per implement child)
+- [x] bind child session to worktree
+- [x] inspect diff (`worktrees diff`)
+- [x] apply/merge changes (`worktrees apply`: atomic, refused on conflict)
+- [x] cleanup lifecycle (`worktrees remove`: refuses unapplied work unless forced)
+
+See [PHASE-10.md](PHASE-10.md).
 
 Exit criteria:
 

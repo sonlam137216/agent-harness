@@ -234,7 +234,7 @@ describe('subagents', () => {
     expect(parsed).toMatchObject({ config: { subagents: { maxTokens: 500 } } });
     expect(() =>
       parsePhaseOneCliArguments(['--model', 'm', '--subagent-tokens', '5', 'hi'], {}, root),
-    ).toThrow('--subagent-tokens requires --subagents.');
+    ).toThrow('--subagent-tokens and --worktrees require --subagents.');
   });
 
   it('is not offered without --subagents', async () => {

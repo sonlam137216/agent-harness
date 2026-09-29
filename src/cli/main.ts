@@ -23,6 +23,9 @@ import {
 import { parseMemoryCommand, runMemoryCommand, runSessionSummaryCommand } from './memory-cli.js';
 import { MemoryWriteError } from '../memory/memory-writer.js';
 import { SessionSummaryError } from '../memory/session-summarizer.js';
+import { GitError } from '../workspace/git-worktree-capability.js';
+import { WorktreeError } from '../worktrees/worktree-manager.js';
+import { createWorktreeManager, parseWorktreeCommand, runWorktreeCommand } from './worktree-cli.js';
 
 function safeErrorMessage(error: unknown): string {
   if (error instanceof EventSubscriberError) return safeErrorMessage(error.cause);
@@ -33,6 +36,8 @@ function safeErrorMessage(error: unknown): string {
     error instanceof RecordStorageError ||
     error instanceof MemoryWriteError ||
     error instanceof SessionSummaryError ||
+    error instanceof WorktreeError ||
+    error instanceof GitError ||
     error instanceof ContextError ||
     error instanceof CliUsageError ||
     error instanceof CliRunError ||
@@ -66,6 +71,23 @@ async function main(): Promise<void> {
           tracing.tracer,
         ),
         (text) => process.stdout.write(`${text}\n`),
+      );
+      return;
+    }
+    const worktreeCommand = parseWorktreeCommand(arguments_, process.cwd());
+    if (worktreeCommand !== undefined) {
+      tracing = createTracing();
+      process.once('SIGINT', cancel);
+      await runWorktreeCommand(
+        worktreeCommand,
+        createWorktreeManager(
+          worktreeCommand.workspaceRoot,
+          worktreeCommand.worktreeDirectory,
+          tracing.tracer,
+          process.env,
+        ),
+        (text) => process.stdout.write(`${text}\n`),
+        cancellation.signal,
       );
       return;
     }

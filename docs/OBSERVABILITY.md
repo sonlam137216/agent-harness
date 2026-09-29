@@ -1,5 +1,14 @@
 # Observability and Tracing Architecture
 
+## Phase 10 worktrees
+
+`worktree.operation` (create/finalize/apply/remove) records the worktree ID, resulting
+status, changed files, insertions, deletions, success and a normalized error type. Git
+calls are nested `workspace.operation` spans (`git.*`), and writes are
+`filesystem.write_file`. `subagent.spawn` adds `subagent.worktree_id` and
+`subagent.changed_files` or `subagent.snapshot_failed`. Paths, branches, patches and file
+contents are never recorded. See [PHASE-10.md](PHASE-10.md).
+
 ## Phase 9 subagents
 
 `subagent.spawn` is a child of the parent's `tool.execute` (`delegate_task`), and the
@@ -154,7 +163,7 @@ Add these only with their owning capabilities:
 ```text
 loop_iteration   (Phase 1 counter, not a globally unique ID)
 subagent_id      (Phase 9)
-workspace_id
+workspace_id     (Phase 10: worktree.id)
 ```
 
 These IDs should appear consistently in:

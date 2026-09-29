@@ -44,6 +44,8 @@ export type FileSystemErrorCode =
   | 'not_directory'
   | 'output_limit_exceeded'
   | 'cancelled'
+  | 'protected_path'
+  | 'size_limit'
   | 'io_error';
 
 export interface FileSystemErrorOptions {

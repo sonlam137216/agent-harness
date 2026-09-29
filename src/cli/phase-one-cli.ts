@@ -45,7 +45,13 @@ import { MemoryWriter } from '../memory/memory-writer.js';
 import { SaveMemoryTool } from '../tools/builtin/save-memory.tool.js';
 import { LocalNoteStorage } from '../workspace/local-note-storage.js';
 import { SubagentManager } from '../subagents/subagent-manager.js';
+import type { WorktreeManager } from '../worktrees/worktree-manager.js';
 import { SubagentRunner } from '../subagents/subagent-runner.js';
+import {
+  createWorktreeManager,
+  createWorktreeProvider,
+  DEFAULT_WORKTREE_DIRECTORY,
+} from './worktree-cli.js';
 import {
   AwaitSubagentTool,
   CancelSubagentTool,
@@ -77,6 +83,8 @@ export const CLI_HELP = `Usage:
   pnpm cli -- sessions show <session-id>
   pnpm cli -- sessions rewind <session-id> --keep-turns <n>
   pnpm cli -- memory add --title <title> [--scope workspace|user] [--file <name>] "<note>"
+  pnpm cli -- worktrees list [--all] | diff <id> | apply <id> | remove <id> [--force]
+             [--workspace <path>] [--worktree-dir <path>]
   pnpm cli -- sessions summarize <session-id> [--scope workspace|user] [--file <name>]
              [--provider <p>] [--model <id>] (defaults: the session's saved model; file "sessions")
 
@@ -98,6 +106,9 @@ Options:
   --subagents           Offer delegate_task, await_subagent and cancel_subagent: read-only
                         explore/plan/review child sessions (max depth 1)
   --subagent-tokens <n> Token cap per subagent (default: 120000; requires --subagents)
+  --worktrees           Also offer the implement role: edits in its own Git worktree and
+                        branch; review with worktrees diff/apply (requires --subagents)
+  --worktree-dir <path> Worktree checkouts and records (default: ~/.agent-harness/worktrees)
   --skill <name>        Invoke a skill for this turn (repeatable; also accepts $name in prompt)
   --user-skills-directory <path> User skill root (default: ~/.agents/skills)
   --mcp-config <path>   Explicit workspace-relative MCP server configuration for this run
@@ -125,7 +136,11 @@ export interface PhaseOneCliConfig {
   readonly rulesDirectory?: string;
   readonly retrieval?: { readonly roots: readonly string[]; readonly maxTokens?: number };
   readonly memory?: { readonly maxTokens?: number; readonly userDirectory?: string };
-  readonly subagents?: { readonly maxTokens?: number };
+  readonly subagents?: {
+    readonly maxTokens?: number;
+    /** Enables the implement role in disposable worktrees under this directory. */
+    readonly worktreeDirectory?: string;
+  };
   readonly permissionMode?: PermissionMode;
   readonly permissionRules?: readonly PermissionRule[];
   readonly skillNames?: readonly string[];
@@ -199,6 +214,8 @@ export function parsePhaseOneCliArguments(
   let userMemoryDirectory: string | undefined;
   let subagentsEnabled = false;
   let subagentTokens: number | undefined;
+  let worktreesEnabled = false;
+  let worktreeDirectory: string | undefined;
   let workspace = currentDirectory;
   let permissionMode: PermissionMode | undefined;
   const skillNames: string[] = [];
@@ -295,6 +312,17 @@ export function parsePhaseOneCliArguments(
       index += 1;
       continue;
     }
+    if (argument === '--worktrees') {
+      worktreesEnabled = true;
+      continue;
+    }
+    if (argument === '--worktree-dir') {
+      const directory = optionValue(arguments_, index, argument);
+      if (directory.trim() === '') throw new CliUsageError('Provide a worktree directory.');
+      worktreeDirectory = resolve(currentDirectory, directory);
+      index += 1;
+      continue;
+    }
     if (argument === '--skill') {
       const name = optionValue(arguments_, index, argument);
       if (!isSkillName(name)) throw new CliUsageError('--skill requires a lowercase skill name.');
@@ -370,8 +398,10 @@ export function parsePhaseOneCliArguments(
   }
   if (!memoryEnabled && (memoryTokens !== undefined || userMemoryDirectory !== undefined))
     throw new CliUsageError('--memory-tokens and --user-memory-directory require --memory.');
-  if (!subagentsEnabled && subagentTokens !== undefined)
-    throw new CliUsageError('--subagent-tokens requires --subagents.');
+  if (!subagentsEnabled && (subagentTokens !== undefined || worktreesEnabled))
+    throw new CliUsageError('--subagent-tokens and --worktrees require --subagents.');
+  if (!worktreesEnabled && worktreeDirectory !== undefined)
+    throw new CliUsageError('--worktree-dir requires --worktrees.');
   if (prompt.length === 0) throw new CliUsageError('Provide a non-empty user prompt.');
   try {
     validateBudget({ windowTokens, outputReserveTokens });
@@ -400,7 +430,14 @@ export function parsePhaseOneCliArguments(
           }
         : {}),
       ...(subagentsEnabled
-        ? { subagents: subagentTokens === undefined ? {} : { maxTokens: subagentTokens } }
+        ? {
+            subagents: {
+              ...(subagentTokens === undefined ? {} : { maxTokens: subagentTokens }),
+              ...(worktreesEnabled
+                ? { worktreeDirectory: worktreeDirectory ?? DEFAULT_WORKTREE_DIRECTORY }
+                : {}),
+            },
+          }
         : {}),
       ...(skillNames.length === 0 ? {} : { skillNames: [...new Set(skillNames)] }),
       ...(userSkillsDirectory === undefined ? {} : { userSkillsDirectory }),
@@ -463,6 +500,17 @@ export async function runPhaseOneCli(
   };
   let subagents: SubagentManager | undefined;
   if (options.subagents !== undefined) {
+    let worktrees: WorktreeManager | undefined;
+    if (options.subagents.worktreeDirectory !== undefined) {
+      worktrees = createWorktreeManager(
+        options.workspaceRoot,
+        options.subagents.worktreeDirectory,
+        options.tracer,
+        options.environment,
+      );
+      // Fail before the first model call if the workspace cannot host worktrees.
+      await worktrees.verify(options.signal);
+    }
     subagents = new SubagentManager({
       runner: new SubagentRunner({
         sampler: options.sampler,
@@ -474,6 +522,9 @@ export async function runPhaseOneCli(
         }),
         sessionStore,
         tools: readTools,
+        ...(worktrees === undefined
+          ? {}
+          : { worktrees: createWorktreeProvider(worktrees, options.tracer) }),
         tracer: options.tracer,
         modelId: options.modelId,
         ...(options.permissionRules === undefined

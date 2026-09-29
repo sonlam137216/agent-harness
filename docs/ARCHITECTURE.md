@@ -18,6 +18,24 @@ This document describes both the small current implementation shape and the inte
 
 ## 2. Target High-Level Architecture
 
+### Phase 10 worktree decision
+
+File mutation enters the harness only through disposable Git worktrees. Workspace adds
+two narrow capabilities: `GitWorktreeCapability` (a fixed set of worktree, snapshot,
+diff, apply and branch operations run as `git` without a shell, with hooks disabled and
+an allowlisted environment) and `FileWriteCapability` (contained, atomic whole-file
+writes that refuse symlinks and `.git`). A new `src/worktrees/WorktreeManager`
+(application level, depends only on those Workspace interfaces and RecordStorage) owns
+the lifecycle: create a worktree and branch per child, snapshot-commit the child's work
+when it ends, and user-driven apply (atomic `git apply`, refused on conflict) and remove
+(refused while changes are unapplied unless forced). The subagent layer sees worktrees
+only through an `IsolatedWorkspaceProvider` port that the CLI implements. The
+`implement` role gets `write_file`/`edit_file` rooted at its checkout, with writes allowed
+by default there and parent rules still overriding. The parent and the user's working
+tree are never written by the model; applying is an explicit user command. Runtime,
+AgentLoop, ToolBridge, ContextBuilder and PermissionEngine are unchanged. See
+[PHASE-10.md](PHASE-10.md).
+
 ### Phase 9 subagent decision
 
 Subagents are a new `src/subagents/` module next to Runtime. A child is an isolated
@@ -648,6 +666,12 @@ All implementations must define:
 
 Do not use an unbounded generic `workspace.git(...)` or `workspace.execute(...)` escape hatch.
 
+Phase 10 adds `FileWriteCapability` (`local-file-writer.ts`) and
+`GitWorktreeCapability` (`local-git-worktrees.ts`). Writes are bound only to worktree
+roots created by `src/worktrees/WorktreeManager`, never to the main workspace root. Git
+runs as a bounded subprocess with repository hooks disabled. Records use the existing
+RecordStorage capability.
+
 Command `cwd` containment is not an OS sandbox. An authorized child process may still access host resources outside the workspace until Phase 11 introduces an isolation boundary.
 
 ---
@@ -839,9 +863,9 @@ lifecycle. The rule is:
 max nesting depth = 1
 ```
 
-Children are read-only. A test role waits for command execution, and a general-purpose
-editing role waits for worktree isolation (Phase 10), which will let agents that modify
-files work without sharing a working tree.
+Shared roles are read-only. The `implement` role (Phase 10) edits only inside its own
+disposable worktree; see §4.7 and [PHASE-10.md](PHASE-10.md). A test role waits for
+command execution.
 
 ---
 
@@ -1019,6 +1043,11 @@ Tool interface / ToolRegistry
 Delegation tools
   ↓
 SubagentManager → SubagentRunner → child SessionRuntime (Runtime interfaces only)
+                                 └→ IsolatedWorkspaceProvider port (implemented by CLI)
+
+WorktreeManager
+  ↓
+GitWorktreeCapability / RecordStorage (Workspace)
 
 Context
   ↓
@@ -1042,7 +1071,10 @@ Runtime → concrete provider ❌
 Runtime → concrete workspace ❌
 Subagent tool → Sampler      ❌  (tools reach children only through SubagentManager)
 Child → delegation tools     ❌  (depth 1)
-Child → write/execute tools  ❌  (until worktree isolation)
+Child → write tools          ❌  (except implement, rooted in its own worktree)
+Child → execute tools        ❌
+Model → main working tree write ❌  (applying worktree changes is a user command)
+Worktrees → Runtime          ❌
 ```
 
 Observability subscribers must not change business outcomes. The required persistence subscriber is an intentional exception: SessionStore failures surface rather than pretending the turn was saved. Subscribers do not reverse dependency direction.

@@ -16,7 +16,9 @@ import type { Tool } from '../tools/tool.interface.js';
 import { ToolBridge } from '../tools/tool-bridge.js';
 import { ToolRegistry } from '../tools/tool-registry.js';
 import {
+  SubagentError,
   SUBAGENT_ROLE_DEFINITIONS,
+  SUBAGENT_ROLES,
   SUBAGENT_TOOL_NAMES,
   type SubagentRole,
   type SubagentRoleDefinition,
@@ -54,6 +56,44 @@ export interface SubagentHandoff {
   readonly iterations: number;
   readonly toolCalls: number;
   readonly usage: { readonly inputTokens: number; readonly outputTokens: number };
+  /** Present for worktree roles: where the changes are and how large they are. */
+  readonly worktree?: {
+    readonly id: string;
+    readonly branch: string;
+    /** Absent when the final snapshot failed; the checkout still holds the files. */
+    readonly changes?: IsolatedWorkspaceChanges;
+  };
+}
+
+/** A type alias (not an interface) so handoffs stay assignable to JSON values. */
+export type IsolatedWorkspaceChanges = {
+  readonly files: number;
+  readonly insertions: number;
+  readonly deletions: number;
+};
+
+/** A disposable checkout with tools rooted inside it. */
+export interface IsolatedWorkspace {
+  readonly id: string;
+  readonly branch: string;
+  readonly root: string;
+  readonly tools: readonly Tool[];
+}
+
+/**
+ * Port for worktree roles, implemented at the composition root. Errors must carry
+ * messages that are safe to show to the parent model.
+ */
+export interface IsolatedWorkspaceProvider {
+  create(
+    input: { readonly subagentId: SubagentId; readonly parentSessionId: SessionId },
+    signal?: AbortSignal,
+  ): Promise<IsolatedWorkspace>;
+  /** Keeps the child's work (e.g. commits it) even after cancellation. */
+  finalize(
+    id: string,
+    input: { readonly sessionId?: SessionId },
+  ): Promise<IsolatedWorkspaceChanges>;
 }
 
 export interface SubagentRunnerOptions {
@@ -61,8 +101,10 @@ export interface SubagentRunnerOptions {
   /** Child context; composed by the caller (typically rules only, never the parent's history). */
   readonly contextBuilder: ContextBuilder;
   readonly sessionStore: SessionStore;
-  /** Candidate child tools. Every one must be a native read-only leaf tool. */
+  /** Candidate tools for shared-workspace roles. Every one must be a native read-only leaf tool. */
   readonly tools: readonly Tool[];
+  /** Enables worktree roles (`implement`); without it they are not offered. */
+  readonly worktrees?: IsolatedWorkspaceProvider;
   readonly tracer: TracingHandle['tracer'];
   readonly modelId: string;
   /** The parent's rules; deny and ask rules therefore also restrict children. */
@@ -81,6 +123,21 @@ function positive(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value <= 0)
     throw new RangeError(`${name} must be a positive safe integer.`);
   return value;
+}
+
+function validateTools(tools: readonly Tool[], allowWrite: boolean): void {
+  for (const tool of tools) {
+    const { name, accessKind, origin } = tool.definition;
+    if ((SUBAGENT_TOOL_NAMES as readonly string[]).includes(name))
+      throw new TypeError('Delegation tools cannot be offered to a subagent.');
+    const kindAllowed = accessKind === 'read' || (allowWrite && accessKind === 'write');
+    if (!kindAllowed || origin === 'external' || tool.resolveInvocation !== undefined)
+      throw new TypeError(
+        allowWrite
+          ? 'Worktree tools must be native read or write leaf tools.'
+          : 'Subagent tools must be native read-only leaf tools.',
+      );
+  }
 }
 
 function childTurnStats(
@@ -124,13 +181,7 @@ export class SubagentRunner {
   readonly #maxReportCharacters: number;
 
   public constructor(options: SubagentRunnerOptions) {
-    for (const tool of options.tools) {
-      const { name, accessKind, origin } = tool.definition;
-      if ((SUBAGENT_TOOL_NAMES as readonly string[]).includes(name))
-        throw new TypeError('Delegation tools cannot be offered to a subagent.');
-      if (accessKind !== 'read' || origin === 'external' || tool.resolveInvocation !== undefined)
-        throw new TypeError('Subagent tools must be native read-only leaf tools.');
-    }
+    validateTools(options.tools, false);
     this.#roles = options.roles ?? SUBAGENT_ROLE_DEFINITIONS;
     for (const role of Object.values(this.#roles)) positive(role.maxIterations, 'maxIterations');
     this.#maxTokens = positive(options.maxTokens ?? DEFAULT_SUBAGENT_MAX_TOKENS, 'maxTokens');
@@ -143,6 +194,12 @@ export class SubagentRunner {
 
   public role(role: SubagentRole): SubagentRoleDefinition {
     return this.#roles[role];
+  }
+
+  public availableRoles(): readonly SubagentRole[] {
+    return SUBAGENT_ROLES.filter(
+      (role) => this.#roles[role].workspace === 'shared' || this.#options.worktrees !== undefined,
+    );
   }
 
   public async run(request: SubagentRunRequest): Promise<SubagentHandoff> {
@@ -166,6 +223,32 @@ export class SubagentRunner {
       if (request.signal?.aborted === true) cancel();
       else request.signal?.addEventListener('abort', cancel, { once: true });
 
+      let isolated: IsolatedWorkspace | undefined;
+      if (definition.workspace === 'worktree') {
+        try {
+          const provider = options.worktrees;
+          if (provider === undefined) throw new Error('Worktrees are not enabled for this run.');
+          isolated = await provider.create(
+            { subagentId: request.subagentId, parentSessionId: request.parent.sessionId },
+            controller.signal,
+          );
+          validateTools(isolated.tools, true);
+          span.setAttribute('subagent.worktree_id', isolated.id);
+        } catch (error) {
+          request.signal?.removeEventListener('abort', cancel);
+          span.setAttributes({ success: false, 'error.type': 'worktree_unavailable' });
+          span.setStatus({ code: SpanStatusCode.ERROR });
+          span.end();
+          throw new SubagentError(
+            'worktree_unavailable',
+            error instanceof Error
+              ? error.message.slice(0, 300)
+              : 'The worktree could not be created.',
+          );
+        }
+      }
+      const tools = isolated?.tools ?? options.tools;
+
       let consumed = 0;
       let budgetExceeded = false;
       const sampler: Sampler = {
@@ -182,7 +265,7 @@ export class SubagentRunner {
       };
 
       const registry = new ToolRegistry();
-      for (const tool of options.tools)
+      for (const tool of tools)
         if (definition.tools.includes(tool.definition.name)) registry.register(tool);
       const events = new EventBus();
       let childSessionId: SessionId | undefined;
@@ -196,7 +279,13 @@ export class SubagentRunner {
         // No approval handler: anything that would need a prompt is denied inside a child.
         permissions: new PermissionEngine({
           mode: 'auto',
-          ...(options.permissionRules === undefined ? {} : { rules: options.permissionRules }),
+          rules: [
+            ...(options.permissionRules ?? []),
+            // Writes land only in the disposable worktree; parent deny/ask rules still win.
+            ...(isolated === undefined
+              ? []
+              : [{ accessKind: 'write' as const, decision: 'allow' as const }]),
+          ],
         }),
         events,
       });
@@ -227,6 +316,7 @@ export class SubagentRunner {
           tools: registry.getModelDefinitions(),
           configuration: {
             ...options.configuration,
+            ...(isolated === undefined ? {} : { workspaceRoot: isolated.root }),
             parent: { ...request.parent, subagentId: request.subagentId, role: request.role },
           },
           signal: controller.signal,
@@ -264,6 +354,26 @@ export class SubagentRunner {
         runtime.dispose();
         for (const stop of unsubscribe) stop();
         request.signal?.removeEventListener('abort', cancel);
+      }
+
+      if (isolated !== undefined) {
+        let changes: IsolatedWorkspaceChanges | undefined;
+        try {
+          changes = await options.worktrees!.finalize(isolated.id, {
+            ...(handoff.sessionId === undefined ? {} : { sessionId: handoff.sessionId }),
+          });
+          span.setAttribute('subagent.changed_files', changes.files);
+        } catch {
+          span.setAttribute('subagent.snapshot_failed', true);
+        }
+        handoff = {
+          ...handoff,
+          worktree: {
+            id: isolated.id,
+            branch: isolated.branch,
+            ...(changes === undefined ? {} : { changes }),
+          },
+        };
       }
 
       span.setAttributes({
