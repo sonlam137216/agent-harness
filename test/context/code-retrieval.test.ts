@@ -150,9 +150,13 @@ describe('bounded lexical code retrieval', () => {
     expect(bounded.bytesRead).toBeLessThanOrEqual(10);
     const best = await retriever({ maxCandidates: 1 }).retrieve(input());
     expect(best.candidates[0]?.path).toBe('src/z.ts');
-    expect(best.partialReasons).toContain('candidates');
+    // Dropping lower-ranked matches after a complete scan is not a coverage gap.
+    expect(best.selectionLimits).toEqual(['candidates']);
+    expect(best.partialReasons).toEqual([]);
     await put('src/a.ts', 'checkpoint '.repeat(400));
-    expect((await retriever().retrieve(input('checkpoint'))).partialReasons).toContain('snippet');
+    const long = await retriever().retrieve(input('checkpoint'));
+    expect(long.selectionLimits).toContain('snippet');
+    expect(long.partialReasons).toEqual([]);
     expect(
       (await retriever().retrieve(input('checkpoint '.repeat(1000)))).partialReasons,
     ).toContain('query');
@@ -301,7 +305,13 @@ describe('bounded lexical code retrieval', () => {
     const calls = sample.mock.calls.length;
     sample.mockClear();
     const retrieve = vi.fn<CodeRetriever['retrieve']>(() =>
-      Promise.resolve({ candidates: [], partialReasons: [], filesConsidered: 0, bytesRead: 0 }),
+      Promise.resolve({
+        candidates: [],
+        partialReasons: [],
+        selectionLimits: [],
+        filesConsidered: 0,
+        bytesRead: 0,
+      }),
     );
     const result = await new ContextBuilder(tracing.tracer, {
       ...baseOptions,
@@ -311,6 +321,79 @@ describe('bounded lexical code retrieval', () => {
     expect(result.accounting.compactedTurns).toBe(baseline.accounting.compactedTurns);
     expect(retrieve.mock.calls[0]?.[0].query).toBe('Explain checkpoint budget.');
     expect(result.session.turns).toEqual(session.turns);
+  });
+
+  it('tells the model only about coverage gaps, not selection limits', async () => {
+    await put('src/a.ts', 'const checkpoint = 1;');
+    await put('src/z.ts', 'const checkpoint = budget;');
+    const notice = async (options: Parameters<typeof retriever>[0]) => {
+      const built = await new ContextBuilder(tracing.tracer, {
+        codeRetrieval: { retriever: retriever(options) },
+      }).build(buildInput());
+      const content = built.request.messages.find((m) =>
+        m.content?.startsWith('Repository excerpts:'),
+      )?.content;
+      return JSON.parse(content!.slice(content!.indexOf('{'))) as { partialReasons: string[] };
+    };
+    expect((await notice({ maxCandidates: 1 })).partialReasons).toEqual([]);
+    expect((await notice({ maxFiles: 1 })).partialReasons).toEqual(['files']);
+  });
+
+  it('scans once per turn, repacks cached candidates and never caches failures', async () => {
+    await put('src/a.ts', 'const checkpoint = budget;');
+    const code = retriever();
+    const retrieve = vi.fn(code.retrieve.bind(code));
+    const builder = new ContextBuilder(tracing.tracer, {
+      codeRetrieval: { retriever: { retrieve } },
+    });
+    const first = buildInput();
+    const a = await builder.build(first);
+    const b = await builder.build({ ...first, modelCallId: createModelCallId() });
+    expect(retrieve).toHaveBeenCalledTimes(1);
+    expect(b.accounting.sources.retrieval).toBe(a.accounting.sources.retrieval);
+
+    // A new turn rescans and observes edits made since the previous turn.
+    await put('src/a.ts', 'const checkpoint = budget; // edited');
+    const nextTurnId = createTurnId();
+    const second = await builder.build({
+      ...first,
+      session: {
+        ...first.session,
+        turns: [
+          { ...first.session.turns[0]!, status: 'completed' as const },
+          {
+            id: nextTurnId,
+            status: 'in_progress' as const,
+            entries: [{ kind: 'user_message' as const, content: 'Explain checkpoint budget.' }],
+          },
+        ],
+      },
+      turnId: nextTurnId,
+      modelCallId: createModelCallId(),
+    });
+    expect(retrieve).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(second.request.messages)).toContain('edited');
+
+    await tracing.forceFlush();
+    expect(
+      exporter
+        .getFinishedSpans()
+        .filter((span) => span.name === 'context.code_retrieval')
+        .map((span) => span.attributes['cache.hit']),
+    ).toEqual([false, true, false]);
+
+    const flaky = vi
+      .fn<CodeRetriever['retrieve']>()
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockImplementation(code.retrieve.bind(code));
+    const retrying = new ContextBuilder(tracing.tracer, {
+      codeRetrieval: { retriever: { retrieve: flaky } },
+    });
+    const request = buildInput();
+    await expect(retrying.build(request)).rejects.toMatchObject({ code: 'source_failed' });
+    await retrying.build(request);
+    await retrying.build(request);
+    expect(flaky).toHaveBeenCalledTimes(2);
   });
 
   it('enforces per-read byte limits without increasing the adapter limit', async () => {

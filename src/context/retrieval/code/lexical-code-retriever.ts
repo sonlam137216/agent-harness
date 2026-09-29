@@ -22,6 +22,7 @@ import {
   type CodeRetrievalInput,
   type CodeRetrievalResult,
   type PartialReason,
+  type SelectionLimit,
 } from './code-retriever.js';
 
 const STOP_WORDS = new Set(
@@ -87,6 +88,7 @@ export class LexicalCodeRetriever implements CodeRetriever {
       const deadline = Math.min(input.deadlineMs ?? Infinity, Date.now() + this.#limits.duration);
       const cancellation = createCancellationScope(input.signal, deadline);
       const partial = new Set<PartialReason>();
+      const limited = new Set<SelectionLimit>();
       const candidates: CodeCandidate[] = [];
       let filesConsidered = 0;
       let bytesRead = 0;
@@ -226,7 +228,7 @@ export class LexicalCodeRetriever implements CodeRetriever {
               for (let line = start; line <= end; line += 1) {
                 const next = content + (line === start ? '' : '\n') + lines[line]!;
                 if (next.length > 1800) {
-                  partial.add('snippet');
+                  limited.add('snippet');
                   break;
                 }
                 content = next;
@@ -245,7 +247,7 @@ export class LexicalCodeRetriever implements CodeRetriever {
               candidates.sort(compare);
               if (candidates.length > this.#limits.candidates) {
                 candidates.pop();
-                partial.add('candidates');
+                limited.add('candidates');
               }
             }
           }
@@ -303,11 +305,18 @@ export class LexicalCodeRetriever implements CodeRetriever {
           entries_visited: entriesVisited,
           partial: partial.size > 0,
           partial_reasons: [...partial],
+          selection_limits: [...limited],
           duration_ms: performance.now() - started,
         });
         span.end();
       }
-      return { candidates, partialReasons: [...partial], filesConsidered, bytesRead };
+      return {
+        candidates,
+        partialReasons: [...partial],
+        selectionLimits: [...limited],
+        filesConsidered,
+        bytesRead,
+      };
     });
   }
 }

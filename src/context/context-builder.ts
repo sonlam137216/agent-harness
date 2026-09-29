@@ -6,7 +6,11 @@ import { SamplingError, type ModelMessage, type ModelRequest } from '../model/sa
 import type { TracingHandle } from '../observability/tracing.js';
 import type { Session } from '../session/session.js';
 import { compactTurns } from './compaction.js';
-import { codeContext, type CodeRetrievalOptions } from './retrieval/code/code-context.js';
+import {
+  codeContext,
+  TurnRetrievalCache,
+  type CodeRetrievalOptions,
+} from './retrieval/code/code-context.js';
 import {
   checkContextCancellation,
   ContextError,
@@ -77,6 +81,7 @@ export class ContextBuilder {
   readonly #keepRecentTurns: number;
   readonly #conversation = new ConversationSource();
   readonly #codeRetrieval: CodeRetrievalOptions | undefined;
+  readonly #retrievalCache = new TurnRetrievalCache();
 
   public constructor(
     private readonly tracer: TracingHandle['tracer'],
@@ -318,6 +323,7 @@ export class ContextBuilder {
                 Math.min(this.#codeRetrieval.maxTokens ?? 4096, inputLimit - total(messages)),
                 this.#counter,
                 this.tracer,
+                this.#retrievalCache,
               );
         checkContextCancellation(input);
         const retrievalTokens = contributionTokens(this.#counter, retrievalMessages, []);

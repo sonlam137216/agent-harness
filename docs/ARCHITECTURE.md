@@ -32,8 +32,13 @@ per-read byte limit so aggregate scanning budgets can bound actual reads.
 The initial adapter uses deterministic lexical terms and bounded line windows,
 fresh reads, no external dependencies and no cache. It skips symlinks, excluded
 paths and subtrees with unloaded nested rules. Scan bounds produce partial-coverage
-metadata; I/O/containment failures surface as normalized Context errors. See
-[PHASE-7.md](PHASE-7.md) for the contract and CLI configuration.
+metadata; candidate/snippet truncation after a complete scan is a separate
+selection limit that is not presented to the model as missing coverage. I/O and
+containment failures surface as normalized Context errors. Phase 7.3 adds a
+Context-owned, in-memory, single-entry per-turn cache so later loop iterations
+repack the first successful scan instead of rescanning; it is not persisted and
+failures are not cached. See [PHASE-7.md](PHASE-7.md) for the contract and CLI
+configuration.
 
 ### Phase 7.1 benchmark decision
 

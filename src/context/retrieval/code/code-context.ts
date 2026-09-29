@@ -9,11 +9,30 @@ import {
 } from '../../context-budget.js';
 import type { ContextSourceInput } from '../../context-source.js';
 import type { ModelCallId } from '../../../ids.js';
-import type { CodeCandidate, CodeRetriever } from './code-retriever.js';
+import type { CodeCandidate, CodeRetrievalResult, CodeRetriever } from './code-retriever.js';
 
 export interface CodeRetrievalOptions {
   readonly retriever: CodeRetriever;
   readonly maxTokens?: number;
+}
+
+/**
+ * Reuses one successful scan for the rest of a turn. The query is the active
+ * turn's user message, which cannot change mid-turn, so later iterations only
+ * repack the same candidates. Excerpts are therefore a snapshot from the turn's
+ * first scan; read tools remain the source of fresh file content. Failed or
+ * cancelled scans are never stored. Holds a single entry, in memory only.
+ */
+export class TurnRetrievalCache {
+  #entry: { readonly key: string; readonly result: CodeRetrievalResult } | undefined;
+
+  public get(key: string): CodeRetrievalResult | undefined {
+    return this.#entry?.key === key ? this.#entry.result : undefined;
+  }
+
+  public set(key: string, result: CodeRetrievalResult): void {
+    this.#entry = { key, result };
+  }
 }
 
 /** Context owns packing; retrievers never decide the model request budget. */
@@ -23,6 +42,7 @@ export async function codeContext(
   allowance: number,
   counter: TokenCounter,
   tracer: TracingHandle['tracer'],
+  cache: TurnRetrievalCache,
 ): Promise<readonly ModelMessage[]> {
   return tracer.startActiveSpan('context.code_retrieval', async (span) => {
     const started = performance.now();
@@ -34,7 +54,7 @@ export async function codeContext(
       selected_items: 0,
       selected_files: 0,
       selected_tokens: 0,
-      'cache.enabled': false,
+      'cache.enabled': true,
     });
     try {
       checkContextCancellation(input);
@@ -49,16 +69,22 @@ export async function codeContext(
         span.setAttributes({ success: true, skipped: 'query' });
         return [];
       }
-      const result = await options.retriever.retrieve({
-        query,
-        counter,
-        sessionId: input.session.id,
-        turnId: input.turnId,
-        modelCallId: input.modelCallId,
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-        ...(input.deadlineMs === undefined ? {} : { deadlineMs: input.deadlineMs }),
-      });
+      const key = JSON.stringify([input.session.id, input.turnId, query]);
+      const cached = cache.get(key);
+      span.setAttribute('cache.hit', cached !== undefined);
+      const result =
+        cached ??
+        (await options.retriever.retrieve({
+          query,
+          counter,
+          sessionId: input.session.id,
+          turnId: input.turnId,
+          modelCallId: input.modelCallId,
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+          ...(input.deadlineMs === undefined ? {} : { deadlineMs: input.deadlineMs }),
+        }));
       checkContextCancellation(input);
+      if (cached === undefined) cache.set(key, result);
       const render = (selected: readonly CodeCandidate[]): ModelMessage[] => [
         {
           role: 'user',
@@ -92,6 +118,7 @@ export async function codeContext(
         selected_files: fits ? new Set(selected.map((item) => item.path)).size : 0,
         selected_tokens: contributionTokens(counter, packed, []),
         partial: result.partialReasons.length > 0,
+        selection_limited: result.selectionLimits.length > 0,
         budget_omitted_items: result.candidates.length - (fits ? selected.length : 0),
       });
       return packed;

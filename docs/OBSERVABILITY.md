@@ -5,17 +5,22 @@
 `context.code_retrieval` is a child of `context.build` and owns optional evidence
 selection. It records session/turn/model-call IDs, token allowance, selected items,
 selected files, selected tokens, candidates, budget omissions, partial flag,
-skip reason, duration and normalized outcome. `retrieval.code` is its child and
-owns lexical scanning/ranking: files considered (attempted eligible reads), entries
-visited, bytes successfully read, candidate count, partial reasons, duration and
-normalized outcome. Workspace read/list spans remain nested beneath scanning.
+selection-limited flag, skip reason, `cache.enabled=true`, `cache.hit`, duration and
+normalized outcome. `retrieval.code` is its child and owns lexical scanning/ranking:
+files considered (attempted eligible reads), entries visited, bytes successfully
+read, candidate count, `partial_reasons` (coverage gaps), `selection_limits`
+(`candidates`/`snippet` shaping after a complete scan), duration and normalized
+outcome. Workspace read/list spans remain nested beneath scanning.
 
-`cache.enabled=false` describes fresh reads; no cache hits or misses are fabricated.
+Phase 7.3 adds a per-turn cache in Context: `cache.hit=true` means the build reused
+the turn's earlier successful scan, so no `retrieval.code` span or Workspace reads
+occur for it. The retriever itself still reports `cache.enabled=false`.
 No queries, paths, excerpts or raw exceptions are recorded. Scan bounds are partial
 success, while parent cancellation/deadline and I/O failures are errors. Selection
 success does not by itself imply that model sampling occurred. Context's existing
 `context.retrieval_tokens` includes the complete message. Benchmark reports expose
-aggregate scan/selection counters in addition to all underlying filesystem work.
+aggregate scan/selection counters, per-reason partial and selection-limit counts and
+cache hits in addition to all underlying filesystem work.
 
 ## Phase 7.1 benchmark reporting
 

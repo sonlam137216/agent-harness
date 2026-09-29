@@ -366,9 +366,11 @@ Goal: reduce repository exploration cost.
 
 - [x] 7.1: versioned exploration tasks, hashed fixture, scripted benchmark and opt-in live reporting
 - [x] 7.2: opt-in bounded lexical retrieval with optional context budgeting
-- [ ] 7.3: measured comparison with human-reviewed correctness and evidence coverage
+- [x] 7.3a: coverage signals separated from selection limits
+- [x] 7.3b: one retrieval scan per turn (in-memory per-turn cache)
+- [ ] 7.3c: measured live comparison with human-reviewed correctness and evidence coverage
 
-Phase 7.1–7.2 are implemented; see [PHASE-7.md](PHASE-7.md). Scripted runs verify
+Phase 7.1–7.2 and the 7.3a–b preparation are implemented; see [PHASE-7.md](PHASE-7.md). Scripted runs verify
 accounting, not model quality or token savings. No live-model baseline has been
 claimed. The remaining sequence is described in [PHASE-7-PLAN.md](PHASE-7-PLAN.md).
 
@@ -409,9 +411,10 @@ Metrics:
 - [x] files considered
 - [x] files selected
 - [x] retrieval latency
-- [ ] cache hit/miss
+- [x] cache hit/miss
 
-Caching is disabled in 7.2; hit/miss metrics remain deferred with a cache implementation.
+Phase 7.3b reports per-turn cache hits on `context.code_retrieval`; a cross-turn
+cache would need an invalidation strategy and is not implemented.
 
 Exit criteria:
 

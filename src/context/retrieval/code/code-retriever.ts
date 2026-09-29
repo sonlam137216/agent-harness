@@ -21,21 +21,24 @@ export interface CodeRetrievalInput {
   readonly deadlineMs?: number;
 }
 
+/** Scan coverage gaps: some in-scope source or query terms were not examined. */
 export type PartialReason =
   | 'entries'
   | 'files'
   | 'bytes'
   | 'file_size'
   | 'directory_size'
-  | 'candidates'
   | 'time'
   | 'nested_rules'
-  | 'query'
-  | 'snippet';
+  | 'query';
+
+/** Output shaping after a scan: every file was examined, but not every match was kept. */
+export type SelectionLimit = 'candidates' | 'snippet';
 
 export interface CodeRetrievalResult {
   readonly candidates: readonly CodeCandidate[];
   readonly partialReasons: readonly PartialReason[];
+  readonly selectionLimits: readonly SelectionLimit[];
   readonly filesConsidered: number;
   readonly bytesRead: number;
 }

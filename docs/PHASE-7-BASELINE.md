@@ -83,6 +83,33 @@ this is measured overhead, not token savings or a quality assessment. Partial
 coverage is explicitly reported and must not be treated as exhaustive evidence.
 Timing is local and includes instrumentation overhead.
 
-Phase 7.3 must evaluate whether a live model can use these excerpts to reduce its
+## Phase 7.3a–b paired scripted check
+
+Recorded 2026-09-29 after separating selection limits from coverage gaps and adding
+the per-turn scan cache. Same method as above: two repeats per task, identical task
+and corpus hashes within the pair, source revision `82f8f54` plus uncommitted 7.3a–b
+changes. The fixture hash (`2addd257…c8a0`) differs from the 7.2 pair because the
+fixture copies changed source files, so compare the 7.2 row only as indicative.
+
+| Measurement | 7.2 retrieval on | 7.3a–b retrieval off | 7.3a–b retrieval on |
+| --- | ---: | ---: | ---: |
+| Completed runs | 20/20 | 20/20 | 20/20 |
+| Median all-request estimated units | 79,591 | 63,289 | 79,563 |
+| Median read_file calls | 2 | 2 | 2 |
+| Median elapsed time (ms) | 60.84 | 8.39 | 26.93 |
+| Total successful filesystem bytes read | 12,160,192 | 1,292,512 | 4,012,192 |
+| Retrieval scans | 80 | 0 | 20 |
+| Per-turn cache hits | — | 0 | 60 |
+| Scans reporting partial coverage | 74 | 0 | 0 |
+| Scans with selection limits (`candidates`) | — | 0 | 18 |
+
+Every former partial report was candidate-list truncation after a complete scan;
+no scan in this suite hit a real coverage bound. The model now receives no false
+partial-coverage notice. Rescanning dropped from four to one scan per run, cutting
+retrieval I/O by 75%. Estimated request size is unchanged: the same excerpts are
+still sent on every model request, which is inherent to stateless requests. Whether
+a live model offsets that by reading fewer files remains the Phase 7.3c question.
+
+Phase 7.3c must evaluate whether a live model can use these excerpts to reduce its
 own exploration while preserving correctness. Keep retrieval opt-in until that
 comparison supports a broader default. The proposed savings target is unproven.

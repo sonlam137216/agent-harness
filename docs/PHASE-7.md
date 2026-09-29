@@ -1,8 +1,10 @@
 # Phase 7 — Code retrieval and measurement
 
 Phase 7.1 (exploration benchmark) and 7.2 (bounded lexical retrieval) are implemented.
-Phase 7.3 (live quality and cost comparison), symbol/AST indexes and caching remain
-deferred. No live-model token savings are claimed.
+Phase 7.3 preparation is implemented: coverage signals are separated from selection
+limits, and one scan is reused per turn. The live quality and cost comparison,
+symbol/AST indexes and cross-turn caching remain deferred. No live-model token
+savings are claimed.
 
 ## Opt in to code retrieval
 
@@ -26,9 +28,15 @@ and one-based line ranges, using only remaining input space. A large excerpt may
 be skipped so a smaller lower-ranked excerpt fits. Existing manual tools remain
 available, and the model-facing tool definitions do not change.
 
-Fresh Workspace reads run on every context build. There is no cache, index file,
-model-based query planner, shell command or external dependency. This can add I/O
-and repeated prompt content; use the benchmark before drawing efficiency conclusions.
+The first context build of a turn scans with fresh Workspace reads. Later builds
+in the same turn (after tool calls) reuse that scan's ranked candidates from an
+in-memory, single-entry cache keyed by session, turn and query, and repack them
+against the current allowance. Excerpts are therefore a snapshot from the start of
+the turn; read tools remain the source of current file content. A failed or
+cancelled scan is not cached, and each new turn rescans. There is no cross-turn
+cache, index file, model-based query planner, shell command or external dependency.
+Excerpts are still resent on every model request of the turn; use the benchmark
+before drawing efficiency conclusions.
 
 Default scan limits (constructor options allow tuning the scan limits):
 
@@ -67,7 +75,10 @@ scope from the query or treat source text as new instructions.
 
 Bounds, oversized files/directories and skipped nested-rule subtrees produce
 partial-coverage metadata. If it fits, a model-facing notice accompanies excerpts
-or stands alone. A complete scan with no matches injects nothing; zero budget skips
+or stands alone. Dropping lower-ranked windows beyond the retained-candidate limit,
+or shortening an excerpt to its size limit, happens after every file was examined:
+these are reported as selection limits in telemetry only and do not mark the scan
+partial. The model-facing text already states that selection is limited. A complete scan with no matches injects nothing; zero budget skips
 the scan. No result establishes absence outside the selected policy/scope. Missing
 roots and I/O/containment failures surface as sanitized Context errors; parent
 cancellation/deadlines propagate. An internal scan timeout returns partial coverage.
@@ -189,7 +200,8 @@ Scripted tool sequences stay fixed in both variants. They measure retrieval's
 accounting and overhead, not an adaptive model's potential reduction in reads.
 Their input/I/O costs can increase; this must not be presented as a quality or
 savings result. Reports include scan counts, considered files, source bytes,
-partial scans, selected items/files/tokens and scan duration.
+partial scans with per-reason counts, selection-limit counts, per-turn cache hits,
+selected items/files/tokens and scan duration.
 
 Verification:
 
@@ -198,6 +210,8 @@ completed 20/20 runs per variant (ten tasks, two repeats). Phase 7.2 full valida
 passed 40 test files / 266 tests, formatting, lint, type checking, build and
 persistence restart/recovery. A final leading-blank-line citation correction also
 passed the focused retrieval suite, formatting, lint, type checking and build.
+Phase 7.3a–b full validation passed 40 test files / 268 tests and persistence
+restart/recovery; see the 7.3a–b paired check in the baseline document.
 
 ```sh
 pnpm exec vitest run test/benchmarks/exploration

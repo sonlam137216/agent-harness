@@ -93,6 +93,18 @@ export class SamplingMeasurements implements Sampler {
   }
 }
 
+/** Counts how many spans carry each value of a string-array attribute. */
+function countValues(items: readonly ReadableSpan[], key: string): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const span of items) {
+    const values = span.attributes[key];
+    if (!Array.isArray(values)) continue;
+    for (const value of values)
+      if (typeof value === 'string') counts[value] = (counts[value] ?? 0) + 1;
+  }
+  return counts;
+}
+
 export function summarizeSpans(spans: readonly ReadableSpan[]) {
   const named = (name: string) => spans.filter((span) => span.name === name);
   const sum = (items: readonly ReadableSpan[], key: string) =>
@@ -117,6 +129,11 @@ export function summarizeSpans(spans: readonly ReadableSpan[]) {
       bytesRead: sum(named('retrieval.code'), 'bytes_read'),
       partialScans: named('retrieval.code').filter((span) => span.attributes.partial === true)
         .length,
+      partialReasons: countValues(named('retrieval.code'), 'partial_reasons'),
+      selectionLimits: countValues(named('retrieval.code'), 'selection_limits'),
+      cacheHits: named('context.code_retrieval').filter(
+        (span) => span.attributes['cache.hit'] === true,
+      ).length,
       selectedItems: sum(named('context.code_retrieval'), 'selected_items'),
       selectedFiles: sum(named('context.code_retrieval'), 'selected_files'),
       selectedTokens: sum(named('context.code_retrieval'), 'selected_tokens'),
