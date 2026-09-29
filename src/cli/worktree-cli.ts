@@ -14,6 +14,8 @@ import { LocalFileWriter } from '../workspace/local-file-writer.js';
 import { LocalGitWorktrees } from '../workspace/local-git-worktrees.js';
 import { LocalRecordStorage } from '../workspace/local-record-storage.js';
 import { WorktreeManager } from '../worktrees/worktree-manager.js';
+import { RunCommandTool } from '../tools/builtin/run-command.tool.js';
+import { SeatbeltCommandRunner } from '../workspace/sandbox/seatbelt-command-runner.js';
 import { CliUsageError } from './phase-one-cli.js';
 
 export const DEFAULT_WORKTREE_DIRECTORY = join(homedir(), '.agent-harness', 'worktrees');
@@ -24,6 +26,7 @@ export function createWorktreeManager(
   worktreeDirectory: string,
   tracer: TracingHandle['tracer'],
   environment?: Readonly<Record<string, string | undefined>>,
+  linkedPaths?: readonly string[],
 ): WorktreeManager {
   return new WorktreeManager({
     git: new LocalGitWorktrees({ tracer, ...(environment === undefined ? {} : { environment }) }),
@@ -31,19 +34,68 @@ export function createWorktreeManager(
     repositoryRoot: workspaceRoot,
     worktreeDirectory,
     tracer,
+    ...(linkedPaths === undefined ? {} : { linkedPaths }),
   });
 }
 
-/** Binds each implement child to its own worktree with tools rooted inside the checkout. */
+export interface WorktreeSandboxSettings {
+  /** Allowlisted bare command names. */
+  readonly commands: readonly string[];
+  /** Readable toolchain directories (see detectToolchainPaths). */
+  readonly toolchainPaths: readonly string[];
+  /** Never readable except where re-allowed; normally the user's home directory. */
+  readonly privatePaths: readonly string[];
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+}
+
+/**
+ * Binds each implement child to its own worktree with tools rooted inside the checkout.
+ * With sandbox settings, it also gets run_command, confined by a per-worktree policy.
+ */
 export function createWorktreeProvider(
   manager: WorktreeManager,
   tracer: TracingHandle['tracer'],
+  sandbox?: WorktreeSandboxSettings,
 ): IsolatedWorkspaceProvider {
   return {
     create: async ({ subagentId, parentSessionId }, signal) => {
       const record = await manager.create({ id: subagentId, parentSessionId }, signal);
       const files = new LocalFileSystemCapability({ workspaceRoot: record.path, tracer });
       const writer = new LocalFileWriter({ root: record.path, tracer });
+      const commands =
+        sandbox === undefined
+          ? []
+          : [
+              new RunCommandTool(
+                new SeatbeltCommandRunner({
+                  tracer,
+                  ...(sandbox.environment === undefined
+                    ? {}
+                    : { environment: sandbox.environment }),
+                  policy: {
+                    root: record.path,
+                    readPaths: [
+                      ...sandbox.toolchainPaths,
+                      // Linked dependencies resolve into the main tree: readable, not writable.
+                      ...(record.linkedPaths ?? []).map((path) =>
+                        join(record.repositoryRoot, path),
+                      ),
+                    ],
+                    privatePaths: sandbox.privatePaths,
+                    protectedPaths: [join(record.path, '.git')],
+                    network: 'deny',
+                    commands: sandbox.commands,
+                    environment: {
+                      allow: ['PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM'],
+                      set: { CI: '1', NO_COLOR: '1', FORCE_COLOR: '0' },
+                    },
+                    defaultTimeoutMs: 120_000,
+                    maxTimeoutMs: 600_000,
+                    maxOutputBytes: 16_384,
+                  },
+                }),
+              ),
+            ];
       return {
         id: record.id,
         branch: record.branch,
@@ -54,6 +106,7 @@ export function createWorktreeProvider(
           new SearchTextTool(files),
           new WriteFileTool(writer),
           new EditFileTool(files, writer),
+          ...commands,
         ],
       };
     },

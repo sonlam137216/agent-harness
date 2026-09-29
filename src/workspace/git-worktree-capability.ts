@@ -20,15 +20,28 @@ export interface GitWorktreeCapability {
     options?: GitOperationOptions,
   ): Promise<{ readonly root: string; readonly isTopLevel: boolean }>;
   resolveCommit(repository: string, ref: string, options?: GitOperationOptions): Promise<string>;
+  /**
+   * Checks out `base` on a new branch. Each `links` entry (a repository-relative directory
+   * such as `node_modules`) is then symlinked from the main working tree when it exists.
+   */
   addWorktree(
     repository: string,
-    worktree: { readonly path: string; readonly branch: string; readonly base: string },
+    worktree: {
+      readonly path: string;
+      readonly branch: string;
+      readonly base: string;
+      readonly links?: readonly string[];
+    },
     options?: GitOperationOptions,
   ): Promise<void>;
-  /** Commits every change in the worktree; returns the commit, or undefined when clean. */
+  /**
+   * Commits every change in the worktree except `exclude` paths (linked directories);
+   * returns the commit, or undefined when clean.
+   */
   snapshot(
     worktree: string,
     message: string,
+    exclude?: readonly string[],
     options?: GitOperationOptions,
   ): Promise<string | undefined>;
   diffStat(

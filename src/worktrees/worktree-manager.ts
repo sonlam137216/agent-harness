@@ -25,6 +25,8 @@ export interface WorktreeRecord {
   readonly updatedAt: string;
   readonly parentSessionId?: string;
   readonly sessionId?: string;
+  /** Directories symlinked from the main tree; never committed. */
+  readonly linkedPaths?: readonly string[];
 }
 
 export type WorktreeErrorCode =
@@ -57,6 +59,8 @@ export interface WorktreeManagerOptions {
   /** Absolute directory for worktree checkouts; must be outside the repository. */
   readonly worktreeDirectory: string;
   readonly tracer: TracingHandle['tracer'];
+  /** Repository-relative directories (e.g. `node_modules`) linked read-only into checkouts. */
+  readonly linkedPaths?: readonly string[];
 }
 
 const STATUSES: readonly WorktreeStatus[] = ['active', 'ready', 'applied', 'removed'];
@@ -83,7 +87,10 @@ function decode(content: string, id: string): WorktreeRecord {
     record.id !== id ||
     !STATUSES.includes(record.status as WorktreeStatus) ||
     typeof changes !== 'object' ||
-    !['files', 'insertions', 'deletions'].every((key) => Number.isSafeInteger(changes[key]))
+    !['files', 'insertions', 'deletions'].every((key) => Number.isSafeInteger(changes[key])) ||
+    (record.linkedPaths !== undefined &&
+      (!Array.isArray(record.linkedPaths) ||
+        !record.linkedPaths.every((path) => typeof path === 'string')))
   )
     invalid();
   return record as unknown as WorktreeRecord;
@@ -108,6 +115,7 @@ export class WorktreeManager {
   readonly #repositoryRoot: string;
   readonly #directory: string;
   readonly #tracer: TracingHandle['tracer'];
+  readonly #linkedPaths: readonly string[];
   #verified: Promise<string> | undefined;
 
   public constructor(options: WorktreeManagerOptions) {
@@ -118,6 +126,7 @@ export class WorktreeManager {
     this.#repositoryRoot = options.repositoryRoot;
     this.#directory = options.worktreeDirectory;
     this.#tracer = options.tracer;
+    this.#linkedPaths = options.linkedPaths ?? [];
   }
 
   /** Confirms the workspace is a repository top level and checkouts land outside it. */
@@ -179,6 +188,7 @@ export class WorktreeManager {
         createdAt: now,
         updatedAt: now,
         ...(input.parentSessionId === undefined ? {} : { parentSessionId: input.parentSessionId }),
+        ...(this.#linkedPaths.length === 0 ? {} : { linkedPaths: this.#linkedPaths }),
       };
       // Record first so no checkout or branch can exist untracked, then let the checkout
       // finish: killing `git worktree add` midway could leave a half-created worktree.
@@ -188,6 +198,7 @@ export class WorktreeManager {
           path: record.path,
           branch: record.branch,
           base,
+          links: this.#linkedPaths,
         });
       } catch (error) {
         await this.#git.removeWorktree(repositoryRoot, record.path).catch(() => undefined);
@@ -212,8 +223,11 @@ export class WorktreeManager {
         if (record.status !== 'active')
           throw new WorktreeError('not_ready', 'Only an active worktree can be finalized.');
         const head =
-          (await this.#git.snapshot(record.path, `agent-harness: changes from worktree ${id}`)) ??
-          record.baseCommit;
+          (await this.#git.snapshot(
+            record.path,
+            `agent-harness: changes from worktree ${id}`,
+            record.linkedPaths ?? [],
+          )) ?? record.baseCommit;
         const changes =
           head === record.baseCommit
             ? ZERO

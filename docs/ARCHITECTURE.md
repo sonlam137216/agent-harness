@@ -18,6 +18,21 @@ This document describes both the small current implementation shape and the inte
 
 ## 2. Target High-Level Architecture
 
+### Phase 11 sandbox decision
+
+Command execution enters the harness only through Workspace's `CommandCapability`, and
+its only implementation is sandboxed. `src/workspace/sandbox/` defines a backend-
+independent `SandboxPolicy` (root, read paths, private paths, protected paths,
+network `deny`, command allowlist, environment allowlist, time and output limits) and a
+macOS Seatbelt backend (`SeatbeltCommandRunner`, via a pure profile generator). The OS
+enforces the policy for every descendant process, below the permission layer. The
+`run_command` tool (`accessKind: 'execute'`) is built per worktree with a policy rooted at
+that checkout and offered only to `implement` children. The runner allows `execute`
+there, and parent rules still override. Optional linked paths (e.g. `node_modules`) are
+symlinked into checkouts read-only and excluded from snapshots. Runtime, AgentLoop,
+ToolBridge, ContextBuilder and PermissionEngine are unchanged; no command runs without
+the sandbox. See [PHASE-11.md](PHASE-11.md).
+
 ### Phase 10 worktree decision
 
 File mutation enters the harness only through disposable Git worktrees. Workspace adds
@@ -672,6 +687,13 @@ roots created by `src/worktrees/WorktreeManager`, never to the main workspace ro
 runs as a bounded subprocess with repository hooks disabled. Records use the existing
 RecordStorage capability.
 
+Phase 11 adds `CommandCapability` (`command-capability.ts`) with one implementation,
+`sandbox/SeatbeltCommandRunner`, which enforces a `SandboxPolicy` with macOS Seatbelt:
+deny by default, no network, writes only to the worktree and a per-command temporary
+directory, a private home directory apart from the detected toolchain, an environment
+allowlist, time and output limits, and process-group kill. It is bound only to worktree
+roots.
+
 Command `cwd` containment is not an OS sandbox. An authorized child process may still access host resources outside the workspace until Phase 11 introduces an isolation boundary.
 
 ---
@@ -1072,7 +1094,8 @@ Runtime → concrete workspace ❌
 Subagent tool → Sampler      ❌  (tools reach children only through SubagentManager)
 Child → delegation tools     ❌  (depth 1)
 Child → write tools          ❌  (except implement, rooted in its own worktree)
-Child → execute tools        ❌
+Child → execute tools        ❌  (except implement: run_command under the OS sandbox)
+Unsandboxed command execution ❌
 Model → main working tree write ❌  (applying worktree changes is a user command)
 Worktrees → Runtime          ❌
 ```

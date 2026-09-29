@@ -1,5 +1,12 @@
 # Observability and Tracing Architecture
 
+## Phase 11 sandbox
+
+Each sandboxed command is a `workspace.operation` span (`operation=sandbox.command`,
+`sandbox.backend=seatbelt`) recording the allowlisted `command.name`, exit code, timeout
+flag, output truncation, success, error type and duration. Arguments, output, paths and
+environment values are never recorded. See [PHASE-11.md](PHASE-11.md).
+
 ## Phase 10 worktrees
 
 `worktree.operation` (create/finalize/apply/remove) records the worktree ID, resulting

@@ -505,16 +505,18 @@ Goal: enforce environment boundaries below the model/tool permission layer.
 
 Begin with a replaceable interface:
 
-- [ ] `SandboxPolicy`
-- [ ] path rules
-- [ ] command rules
-- [ ] environment filtering
+- [x] `SandboxPolicy`
+- [x] path rules (read/private/protected/write)
+- [x] command rules (bare allowlisted names, no shell)
+- [x] environment filtering (allowlist, private HOME/TMPDIR)
 
 Then choose an implementation:
 
 - [ ] Docker/container sandbox
-- [ ] OS-level sandbox
+- [x] OS-level sandbox (macOS Seatbelt, `sandbox-exec`)
 - [ ] remote sandbox
+
+See [PHASE-11.md](PHASE-11.md).
 
 Exit criteria:
 

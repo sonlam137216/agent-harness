@@ -56,7 +56,8 @@ subagent ID) at `<worktree-dir>/trees/<id>`, on branch `agent-harness/<id>` from
 current `HEAD`. The checkout starts from the last commit, so uncommitted changes in the
 main working tree are **not** visible to the child. The child then runs with
 `read_file`, `list_files`, `search_text`, `write_file` and `edit_file`, all rooted at the
-checkout, and a 12-iteration limit. It cannot run commands or tests. Its session's
+checkout, and a 12-iteration limit. It cannot run commands unless the run also uses `--sandbox`, which adds `run_command`
+under the OS sandbox (see [PHASE-11.md](PHASE-11.md)). Its session's
 `workspaceRoot` is the checkout path.
 
 - `write_file { path, content }` creates or replaces a UTF-8 file (≤ 1,000,000

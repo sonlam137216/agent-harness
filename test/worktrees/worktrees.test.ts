@@ -461,7 +461,7 @@ describe('worktrees', () => {
           {},
           root,
         ),
-      ).toThrow('--worktree-dir requires --worktrees');
+      ).toThrow('require --worktrees');
 
       const id = createSubagentId();
       expect(parseWorktreeCommand(['sessions', 'list'], root)).toBeUndefined();

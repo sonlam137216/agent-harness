@@ -72,7 +72,10 @@ export type IsolatedWorkspaceChanges = {
   readonly deletions: number;
 };
 
-/** A disposable checkout with tools rooted inside it. */
+/**
+ * A disposable checkout with tools rooted inside it. An `execute` tool may be included only
+ * when its commands are confined by an OS-level sandbox bound to `root`.
+ */
 export interface IsolatedWorkspace {
   readonly id: string;
   readonly branch: string;
@@ -125,16 +128,18 @@ function positive(value: number, name: string): number {
   return value;
 }
 
-function validateTools(tools: readonly Tool[], allowWrite: boolean): void {
+/** Shared roles get read tools only; worktree roles may also write and run sandboxed commands. */
+function validateTools(tools: readonly Tool[], isolated: boolean): void {
   for (const tool of tools) {
     const { name, accessKind, origin } = tool.definition;
     if ((SUBAGENT_TOOL_NAMES as readonly string[]).includes(name))
       throw new TypeError('Delegation tools cannot be offered to a subagent.');
-    const kindAllowed = accessKind === 'read' || (allowWrite && accessKind === 'write');
+    const kindAllowed =
+      accessKind === 'read' || (isolated && (accessKind === 'write' || accessKind === 'execute'));
     if (!kindAllowed || origin === 'external' || tool.resolveInvocation !== undefined)
       throw new TypeError(
-        allowWrite
-          ? 'Worktree tools must be native read or write leaf tools.'
+        isolated
+          ? 'Worktree tools must be native read, write or execute leaf tools.'
           : 'Subagent tools must be native read-only leaf tools.',
       );
   }
@@ -281,10 +286,14 @@ export class SubagentRunner {
           mode: 'auto',
           rules: [
             ...(options.permissionRules ?? []),
-            // Writes land only in the disposable worktree; parent deny/ask rules still win.
+            // Writes land only in the disposable worktree and commands only run under the
+            // OS sandbox provided with it; parent deny/ask rules still win.
             ...(isolated === undefined
               ? []
-              : [{ accessKind: 'write' as const, decision: 'allow' as const }]),
+              : [
+                  { accessKind: 'write' as const, decision: 'allow' as const },
+                  { accessKind: 'execute' as const, decision: 'allow' as const },
+                ]),
           ],
         }),
         events,

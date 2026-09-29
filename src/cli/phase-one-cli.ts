@@ -51,7 +51,14 @@ import {
   createWorktreeManager,
   createWorktreeProvider,
   DEFAULT_WORKTREE_DIRECTORY,
+  type WorktreeSandboxSettings,
 } from './worktree-cli.js';
+import { isLinkPath } from '../workspace/local-git-worktrees.js';
+import { DEFAULT_SANDBOX_COMMANDS, isCommandName } from '../workspace/sandbox/sandbox-policy.js';
+import {
+  detectToolchainPaths,
+  seatbeltAvailable,
+} from '../workspace/sandbox/seatbelt-command-runner.js';
 import {
   AwaitSubagentTool,
   CancelSubagentTool,
@@ -109,6 +116,12 @@ Options:
   --worktrees           Also offer the implement role: edits in its own Git worktree and
                         branch; review with worktrees diff/apply (requires --subagents)
   --worktree-dir <path> Worktree checkouts and records (default: ~/.agent-harness/worktrees)
+  --worktree-link <p>   Link a main-tree directory (e.g. node_modules) read-only into each
+                        worktree; never committed (repeatable; requires --worktrees)
+  --sandbox             Offer run_command to implement children, confined by the macOS
+                        Seatbelt sandbox: no network, writes only in the worktree
+                        (requires --worktrees)
+  --sandbox-command <n> Add an allowed command name (repeatable; default: ${DEFAULT_SANDBOX_COMMANDS.join(', ')})
   --skill <name>        Invoke a skill for this turn (repeatable; also accepts $name in prompt)
   --user-skills-directory <path> User skill root (default: ~/.agents/skills)
   --mcp-config <path>   Explicit workspace-relative MCP server configuration for this run
@@ -140,6 +153,10 @@ export interface PhaseOneCliConfig {
     readonly maxTokens?: number;
     /** Enables the implement role in disposable worktrees under this directory. */
     readonly worktreeDirectory?: string;
+    /** Main-tree directories linked read-only into each worktree (e.g. node_modules). */
+    readonly worktreeLinks?: readonly string[];
+    /** Offers run_command to implement children under the OS sandbox. */
+    readonly sandbox?: { readonly commands: readonly string[] };
   };
   readonly permissionMode?: PermissionMode;
   readonly permissionRules?: readonly PermissionRule[];
@@ -216,6 +233,9 @@ export function parsePhaseOneCliArguments(
   let subagentTokens: number | undefined;
   let worktreesEnabled = false;
   let worktreeDirectory: string | undefined;
+  const worktreeLinks: string[] = [];
+  let sandboxEnabled = false;
+  const sandboxCommands: string[] = [];
   let workspace = currentDirectory;
   let permissionMode: PermissionMode | undefined;
   const skillNames: string[] = [];
@@ -323,6 +343,26 @@ export function parsePhaseOneCliArguments(
       index += 1;
       continue;
     }
+    if (argument === '--worktree-link') {
+      const link = optionValue(arguments_, index, argument);
+      if (!isLinkPath(link))
+        throw new CliUsageError('--worktree-link requires a repository-relative directory.');
+      worktreeLinks.push(link);
+      index += 1;
+      continue;
+    }
+    if (argument === '--sandbox') {
+      sandboxEnabled = true;
+      continue;
+    }
+    if (argument === '--sandbox-command') {
+      const name = optionValue(arguments_, index, argument);
+      if (!isCommandName(name))
+        throw new CliUsageError('--sandbox-command requires a bare command name.');
+      sandboxCommands.push(name);
+      index += 1;
+      continue;
+    }
     if (argument === '--skill') {
       const name = optionValue(arguments_, index, argument);
       if (!isSkillName(name)) throw new CliUsageError('--skill requires a lowercase skill name.');
@@ -400,8 +440,13 @@ export function parsePhaseOneCliArguments(
     throw new CliUsageError('--memory-tokens and --user-memory-directory require --memory.');
   if (!subagentsEnabled && (subagentTokens !== undefined || worktreesEnabled))
     throw new CliUsageError('--subagent-tokens and --worktrees require --subagents.');
-  if (!worktreesEnabled && worktreeDirectory !== undefined)
-    throw new CliUsageError('--worktree-dir requires --worktrees.');
+  if (
+    !worktreesEnabled &&
+    (worktreeDirectory !== undefined || worktreeLinks.length > 0 || sandboxEnabled)
+  )
+    throw new CliUsageError('--worktree-dir, --worktree-link and --sandbox require --worktrees.');
+  if (!sandboxEnabled && sandboxCommands.length > 0)
+    throw new CliUsageError('--sandbox-command requires --sandbox.');
   if (prompt.length === 0) throw new CliUsageError('Provide a non-empty user prompt.');
   try {
     validateBudget({ windowTokens, outputReserveTokens });
@@ -435,6 +480,14 @@ export function parsePhaseOneCliArguments(
               ...(subagentTokens === undefined ? {} : { maxTokens: subagentTokens }),
               ...(worktreesEnabled
                 ? { worktreeDirectory: worktreeDirectory ?? DEFAULT_WORKTREE_DIRECTORY }
+                : {}),
+              ...(worktreeLinks.length === 0 ? {} : { worktreeLinks: [...new Set(worktreeLinks)] }),
+              ...(sandboxEnabled
+                ? {
+                    sandbox: {
+                      commands: [...new Set([...DEFAULT_SANDBOX_COMMANDS, ...sandboxCommands])],
+                    },
+                  }
                 : {}),
             },
           }
@@ -507,9 +560,25 @@ export async function runPhaseOneCli(
         options.subagents.worktreeDirectory,
         options.tracer,
         options.environment,
+        options.subagents.worktreeLinks,
       );
       // Fail before the first model call if the workspace cannot host worktrees.
       await worktrees.verify(options.signal);
+    }
+    let sandbox: WorktreeSandboxSettings | undefined;
+    if (options.subagents.sandbox !== undefined) {
+      if (!(await seatbeltAvailable()))
+        throw new CliUsageError('--sandbox requires macOS with a working sandbox-exec.');
+      const environment = options.environment ?? process.env;
+      sandbox = {
+        commands: options.subagents.sandbox.commands,
+        toolchainPaths: await detectToolchainPaths(
+          options.subagents.sandbox.commands,
+          environment.PATH,
+        ),
+        privatePaths: [homedir()],
+        environment,
+      };
     }
     subagents = new SubagentManager({
       runner: new SubagentRunner({
@@ -524,7 +593,7 @@ export async function runPhaseOneCli(
         tools: readTools,
         ...(worktrees === undefined
           ? {}
-          : { worktrees: createWorktreeProvider(worktrees, options.tracer) }),
+          : { worktrees: createWorktreeProvider(worktrees, options.tracer, sandbox) }),
         tracer: options.tracer,
         modelId: options.modelId,
         ...(options.permissionRules === undefined

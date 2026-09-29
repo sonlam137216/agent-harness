@@ -17,9 +17,10 @@ signals, per-turn scan cache) and Phase 8.1–8.3 (opt-in Markdown memory read p
 `memory add` and permission-gated `save_memory`; `sessions summarize`) are implemented.
 Phase 9 (opt-in `--subagents`: read-only explore/plan/review child sessions, background
 delegation, depth 1) and Phase 10 (`--worktrees`: an `implement` child edits only in its
-own Git worktree; user runs `worktrees diff/apply/remove`) are implemented. Phase 7.3c
-(live evaluation) is deferred pending a stronger tool-calling model. The next roadmap
-phase is 11 (sandbox). Do not start another capability unless explicitly requested. The main working tree is never written by the model; `save_memory` only appends notes.
+own Git worktree; user runs `worktrees diff/apply/remove`) and Phase 11 (`--sandbox`:
+implement children get `run_command` under macOS Seatbelt, no network, writes only in the
+worktree) are implemented. Phase 7.3c (live evaluation) is deferred pending a stronger
+tool-calling model. The next roadmap phase is 12 (agent protocol). Do not start another capability unless explicitly requested. The main working tree is never written by the model; `save_memory` only appends notes.
 
 Main flow: `cli` (composition root) → `runtime/SessionRuntime` → `runtime/AgentLoop` →
 `context/ContextBuilder` + `model/Sampler` + `tools/ToolBridge` → `workspace` / `mcp`.

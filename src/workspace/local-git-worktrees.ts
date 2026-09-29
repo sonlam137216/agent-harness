@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { realpath } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { lstat, mkdir, realpath, symlink } from 'node:fs/promises';
+import { dirname, isAbsolute, join } from 'node:path';
 import { SpanStatusCode } from '@opentelemetry/api';
 
 import type { TracingHandle } from '../observability/tracing.js';
@@ -49,6 +49,16 @@ interface GitRun {
   readonly signal: AbortSignal | undefined;
   /** Exit codes treated as success; defaults to 0 only. */
   readonly accept?: readonly number[];
+}
+
+/** Repository-relative directory names that may be linked into a worktree. */
+export function isLinkPath(path: string): boolean {
+  const segments = path.split('/');
+  return (
+    /^[A-Za-z0-9._@+/-]{1,255}$/u.test(path) &&
+    segments.every((segment) => segment !== '' && segment !== '.' && segment !== '..') &&
+    !segments.some((segment) => segment.toLowerCase() === '.git')
+  );
 }
 
 function requireAbsolute(path: string): void {
@@ -121,13 +131,20 @@ export class LocalGitWorktrees implements GitWorktreeCapability {
 
   public addWorktree(
     repository: string,
-    worktree: { readonly path: string; readonly branch: string; readonly base: string },
+    worktree: {
+      readonly path: string;
+      readonly branch: string;
+      readonly base: string;
+      readonly links?: readonly string[];
+    },
     options: GitOperationOptions = {},
   ): Promise<void> {
     return this.#operation('git.worktree_add', async () => {
       requireAbsolute(repository);
       requireAbsolute(worktree.path);
       if (!BRANCH.test(worktree.branch)) throw new GitError('git_failed', 'Invalid branch name.');
+      const links = worktree.links ?? [];
+      if (!links.every(isLinkPath)) throw new GitError('git_failed', 'Invalid linked path.');
       await this.#git({
         args: [
           'worktree',
@@ -142,17 +159,33 @@ export class LocalGitWorktrees implements GitWorktreeCapability {
         cwd: repository,
         signal: options.signal,
       });
+      for (const link of links) {
+        const source = join(repository, link);
+        const target = join(worktree.path, link);
+        const info = await lstat(source).catch(() => undefined);
+        // Only real directories of the main tree are linked; a checked-out path wins.
+        if (info === undefined || !info.isDirectory()) continue;
+        if ((await lstat(target).catch(() => undefined)) !== undefined) continue;
+        await mkdir(dirname(target), { recursive: true });
+        await symlink(source, target, 'dir');
+      }
     });
   }
 
   public snapshot(
     worktree: string,
     message: string,
+    exclude: readonly string[] = [],
     options: GitOperationOptions = {},
   ): Promise<string | undefined> {
     return this.#operation('git.snapshot', async () => {
       requireAbsolute(worktree);
-      await this.#git({ args: ['add', '--all'], cwd: worktree, signal: options.signal });
+      if (!exclude.every(isLinkPath)) throw new GitError('git_failed', 'Invalid excluded path.');
+      await this.#git({
+        args: ['add', '--all', '--', '.', ...exclude.map((path) => `:(exclude,literal)${path}`)],
+        cwd: worktree,
+        signal: options.signal,
+      });
       const staged = await this.#git({
         args: ['diff', '--cached', '--quiet'],
         cwd: worktree,

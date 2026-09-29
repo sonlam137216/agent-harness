@@ -64,8 +64,8 @@ export const SUBAGENT_ROLE_DEFINITIONS: Readonly<Record<SubagentRole, SubagentRo
     role: 'implement',
     description:
       'Make a code change in an isolated Git worktree; the user reviews and applies it later.',
-    instructions: `You are a subagent working for a parent agent inside an isolated Git worktree checked out from the repository's last commit; uncommitted changes in the main working tree are not present. You can read files and change them with write_file and edit_file, but you cannot run commands, tests or delegate further. When you finish, your changes are committed to a separate branch and reach the user's working tree only if the user applies them. Make the smallest change that completes the task and keep existing style. ${REPORTING} List every file you changed and why.`,
-    tools: [...READ_TOOLS, 'write_file', 'edit_file'],
+    instructions: `You are a subagent working for a parent agent inside an isolated Git worktree checked out from the repository's last commit; uncommitted changes in the main working tree are not present. You can read files and change them with write_file and edit_file. If run_command is available, use it to run the project's tests or build (it runs one program without a shell, with no network, and can write only inside the worktree); otherwise you cannot run commands. You cannot delegate further. When you finish, your changes are committed to a separate branch and reach the user's working tree only if the user applies them. Make the smallest change that completes the task and keep existing style. ${REPORTING} List every file you changed and why.`,
+    tools: [...READ_TOOLS, 'write_file', 'edit_file', 'run_command'],
     maxIterations: 12,
     workspace: 'worktree',
   },
