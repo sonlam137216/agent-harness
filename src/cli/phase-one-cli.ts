@@ -90,6 +90,8 @@ export const CLI_HELP = `Usage:
   pnpm cli -- sessions show <session-id>
   pnpm cli -- sessions rewind <session-id> --keep-turns <n>
   pnpm cli -- memory add --title <title> [--scope workspace|user] [--file <name>] "<note>"
+  node dist/src/cli/main.js acp --provider <p> --model <id> [run options]
+             (Agent Client Protocol over stdio for editors; prompts come from the client)
   pnpm cli -- worktrees list [--all] | diff <id> | apply <id> | remove <id> [--force]
              [--workspace <path>] [--worktree-dir <path>]
   pnpm cli -- sessions summarize <session-id> [--scope workspace|user] [--file <name>]
@@ -214,6 +216,8 @@ export function parsePhaseOneCliArguments(
   arguments_: readonly string[],
   environment: Readonly<Record<string, string | undefined>>,
   currentDirectory: string,
+  /** `requirePrompt: false` for servers that receive prompts over a protocol. */
+  options: { readonly requirePrompt?: boolean } = {},
 ): ParsedPhaseOneCliArguments {
   if (arguments_.includes('--help')) return { help: true };
 
@@ -447,7 +451,10 @@ export function parsePhaseOneCliArguments(
     throw new CliUsageError('--worktree-dir, --worktree-link and --sandbox require --worktrees.');
   if (!sandboxEnabled && sandboxCommands.length > 0)
     throw new CliUsageError('--sandbox-command requires --sandbox.');
-  if (prompt.length === 0) throw new CliUsageError('Provide a non-empty user prompt.');
+  if (options.requirePrompt !== false && prompt.length === 0)
+    throw new CliUsageError('Provide a non-empty user prompt.');
+  if (options.requirePrompt === false && prompt.length > 0)
+    throw new CliUsageError('Prompts are sent by the client, not on the command line.');
   try {
     validateBudget({ windowTokens, outputReserveTokens });
   } catch {

@@ -1,5 +1,12 @@
 # Observability and Tracing Architecture
 
+## Phase 12 protocol
+
+In `acp` mode stdout carries only JSON-RPC, and spans are exported to stderr as one JSON
+line each (`StderrSpanExporter`). `protocol.prompt` (`protocol.name=acp`, `session.id`,
+`protocol.outcome`) wraps each prompt's normal `session.run` tree. Prompt text and tool
+payloads are never attributes. See [PHASE-12.md](PHASE-12.md).
+
 ## Phase 11 sandbox
 
 Each sandboxed command is a `workspace.operation` span (`operation=sandbox.command`,

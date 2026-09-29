@@ -18,6 +18,22 @@ This document describes both the small current implementation shape and the inte
 
 ## 2. Target High-Level Architecture
 
+### Phase 12 protocol decision
+
+External clients use the Agent Client Protocol (ACP, JSON-RPC 2.0 over stdio), which is
+implemented in `src/protocol/` without new dependencies. `JsonRpcConnection` is a
+bidirectional, bounded NDJSON transport that handles requests concurrently.
+`AcpAgent` implements initialize, session/new, session/load, session/prompt,
+session/cancel, streamed session/update notifications and session/request_permission
+round trips. The protocol layer sits at the CLI/API level and depends on Runtime types
+only. Prompts run through an `AcpPromptRunner` port that the CLI implements with the
+same `runPhaseOneCli` composition as a one-shot run, so the CLI, an IDE and CI share one
+runtime, store, tool set, permission engine and trace model. Updates are derived from
+the existing `SessionUpdated` and `ToolStarted` events. Approvals become protocol
+requests through the existing ApprovalHandler seam. In `acp` mode spans go to stderr so
+stdout carries only protocol messages. Runtime, AgentLoop, Sampler, ToolBridge and the
+Session schema are unchanged. See [PHASE-12.md](PHASE-12.md).
+
 ### Phase 11 sandbox decision
 
 Command execution enters the harness only through Workspace's `CommandCapability`, and
@@ -1050,7 +1066,7 @@ The CLI remains one-shot per invocation. Phase 3 adds permission flags and an ex
 Allowed:
 
 ```text
-CLI/API
+CLI/API  (cli/, protocol/ → AcpPromptRunner implemented by cli/)
   ↓
 Runtime
   ↓
@@ -1098,6 +1114,8 @@ Child → execute tools        ❌  (except implement: run_command under the OS 
 Unsandboxed command execution ❌
 Model → main working tree write ❌  (applying worktree changes is a user command)
 Worktrees → Runtime          ❌
+Protocol → CLI / providers / concrete workspace ❌  (prompts go through AcpPromptRunner)
+Protocol-mode stdout → anything but protocol messages ❌
 ```
 
 Observability subscribers must not change business outcomes. The required persistence subscriber is an intentional exception: SessionStore failures surface rather than pretending the turn was saved. Subscribers do not reverse dependency direction.

@@ -1,53 +1,17 @@
 #!/usr/bin/env node
-import { McpError } from '../mcp/config.js';
 import { FileSessionStore } from '../session/file-session-store.js';
-import { SessionFormatError } from '../session/session-codec.js';
-import { SessionStateError } from '../session/session-history.js';
-import { RecordStorageError } from '../workspace/record-storage.js';
 import { LocalRecordStorage } from '../workspace/local-record-storage.js';
-import { EventSubscriberError } from '../events/event-bus.js';
 import { parseSessionCommand, prepareSessionRun, runSessionCommand } from './session-cli.js';
 import { createTerminalApproval } from './terminal-approval.js';
 
-import { createSampler, SamplerConfigurationError } from '../model/create-sampler.js';
-import { ContextError } from '../context/context-budget.js';
-import { SamplingError } from '../model/sampling-types.js';
+import { createSampler } from '../model/create-sampler.js';
 import { createTracing, type TracingHandle } from '../observability/tracing.js';
-import {
-  CLI_HELP,
-  CliRunError,
-  CliUsageError,
-  createMemoryWriter,
-  runPhaseOneCli,
-} from './phase-one-cli.js';
+import { StderrSpanExporter } from '../observability/stderr-span-exporter.js';
+import { CLI_HELP, CliUsageError, createMemoryWriter, runPhaseOneCli } from './phase-one-cli.js';
 import { parseMemoryCommand, runMemoryCommand, runSessionSummaryCommand } from './memory-cli.js';
-import { MemoryWriteError } from '../memory/memory-writer.js';
-import { SessionSummaryError } from '../memory/session-summarizer.js';
-import { GitError } from '../workspace/git-worktree-capability.js';
-import { WorktreeError } from '../worktrees/worktree-manager.js';
 import { createWorktreeManager, parseWorktreeCommand, runWorktreeCommand } from './worktree-cli.js';
-
-function safeErrorMessage(error: unknown): string {
-  if (error instanceof EventSubscriberError) return safeErrorMessage(error.cause);
-  if (
-    error instanceof McpError ||
-    error instanceof SessionFormatError ||
-    error instanceof SessionStateError ||
-    error instanceof RecordStorageError ||
-    error instanceof MemoryWriteError ||
-    error instanceof SessionSummaryError ||
-    error instanceof WorktreeError ||
-    error instanceof GitError ||
-    error instanceof ContextError ||
-    error instanceof CliUsageError ||
-    error instanceof CliRunError ||
-    error instanceof SamplerConfigurationError ||
-    error instanceof SamplingError
-  ) {
-    return error.message;
-  }
-  return 'The CLI failed unexpectedly.';
-}
+import { runAcpServer } from './acp-cli.js';
+import { safeErrorMessage } from './errors.js';
 
 async function main(): Promise<void> {
   let tracing: TracingHandle | undefined;
@@ -92,6 +56,27 @@ async function main(): Promise<void> {
       return;
     }
     const command = parseSessionCommand(arguments_, process.cwd());
+    if (command.kind === 'run' && command.arguments[0] === 'acp') {
+      if (command.resumeId !== undefined)
+        throw new CliUsageError('Use session/load instead of --resume with acp.');
+      // stdout carries the protocol: spans and diagnostics go to stderr only.
+      tracing = createTracing({ exporter: new StderrSpanExporter() });
+      await runAcpServer({
+        arguments: command.arguments.slice(1),
+        environment: process.env,
+        cwd: process.cwd(),
+        sessionStore: new FileSessionStore(
+          new LocalRecordStorage(command.directory),
+          tracing.tracer,
+        ),
+        createSampler: (provider) => createSampler({ provider, environment: process.env }),
+        tracer: tracing.tracer,
+        input: process.stdin,
+        output: process.stdout,
+        diagnostics: (message) => process.stderr.write(`${message}\n`),
+      });
+      return;
+    }
     tracing = createTracing();
     const store = new FileSessionStore(new LocalRecordStorage(command.directory), tracing.tracer);
     if (command.kind === 'summarize') {

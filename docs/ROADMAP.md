@@ -528,12 +528,14 @@ Exit criteria:
 
 Goal: separate runtime from UI.
 
-- [ ] JSON-RPC or ACP-compatible server
-- [ ] session creation
-- [ ] prompt streaming
-- [ ] tool-call streaming
-- [ ] permission requests
-- [ ] IDE/client integration
+- [x] JSON-RPC or ACP-compatible server (ACP v1 over stdio, `acp` command)
+- [x] session creation (`session/new`, `session/load` with replay)
+- [x] prompt streaming (per message; token-level streaming deferred)
+- [x] tool-call streaming (`tool_call` / `tool_call_update`)
+- [x] permission requests (`session/request_permission`)
+- [x] IDE/client integration (any ACP client; sessions shared with the CLI)
+
+See [PHASE-12.md](PHASE-12.md).
 
 Exit criteria:
 

@@ -58,8 +58,13 @@ Phase 11 adds the sandbox: `SandboxPolicy` plus a macOS Seatbelt backend. With
 without a shell, with no network, writes only inside the worktree, a private home and an
 environment allowlist. See `docs/PHASE-11.md`.
 
-Implement one roadmap capability at a time. Phase 11 is complete; the next roadmap phase
-is Phase 12, agent protocol / external clients. Do not start another capability until
+Phase 12 adds the Agent Client Protocol server (`node dist/src/cli/main.js acp …`):
+JSON-RPC over stdio with session/new, session/load, session/prompt, session/cancel,
+streamed session/update and session/request_permission. Each prompt runs through the
+same composition as the CLI, and sessions are shared with it. See `docs/PHASE-12.md`.
+
+Implement one roadmap capability at a time. Phases 0–12 of the roadmap are complete
+(Phase 7.3c live evaluation remains deferred). Do not start another capability until
 explicitly requested. The model never writes the main working tree, and commands run
 only in implement children under the OS sandbox.
 
