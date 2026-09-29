@@ -18,6 +18,28 @@ This document describes both the small current implementation shape and the inte
 
 ## 2. Target High-Level Architecture
 
+### Phase 8.3 session summary decision
+
+`SessionSummarizer` (Memory) turns a saved Session into one memory entry. It depends on
+the Sampler interface (like compaction) and on `MemoryWriter`; it only reads Session and
+never saves it. Input is a projection of completed turns (requests, final answers, tool
+names; no tool outputs) plus any checkpoint summary, bounded newest-first. The CLI
+`sessions summarize` command composes it with the session's saved model/provider. It is
+explicit, not a lifecycle hook, so Runtime, AgentLoop and SessionStore are unchanged.
+
+### Phase 8.2 memory write decision
+
+Writing memory adds one narrow Workspace capability, `NoteStorage`: a locked, atomic
+read-modify-write of flat `*.md` files inside one memory directory, refusing symlinked
+segments/files so nothing is created outside its root. It is not a general file write.
+`MemoryWriter` (Memory) validates that an entry stays exactly one parseable `## ` entry
+and adds provenance; the CLI `memory add` command and the `save_memory` tool both use
+it. `save_memory` is registered only with `--memory`, has `accessKind: 'write'`, and
+therefore passes through the existing PermissionEngine: denied in default auto mode,
+approvable in ask mode, or allowed by an explicit rule. The disallowed
+`Memory → Workspace mutation` rule below still holds for source and project files:
+memory can only append to its own note directory. See [PHASE-8.md](PHASE-8.md).
+
 ### Phase 8.1 memory decision
 
 Memory is a new `src/memory/` module that Context depends on (Context → Memory), never
@@ -747,15 +769,21 @@ Current implementation (Phase 8.1, read path):
 src/memory/
 ├── memory-parser.ts   # `## ` entries with line provenance
 ├── memory-index.ts    # deterministic in-memory BM25
-└── memory-store.ts    # bounded workspace/user discovery and search
+├── memory-store.ts    # bounded workspace/user discovery and search
+├── memory-writer.ts   # validated, provenance-stamped appends (Phase 8.2)
+└── session-summarizer.ts  # explicit session → memory summaries (Phase 8.3)
+
+src/workspace/note-storage.ts, local-note-storage.ts   # narrow note write capability
+src/tools/builtin/save-memory.tool.ts                  # permission-gated write tool
+src/cli/memory-cli.ts                                  # `memory add`
 
 src/context/retrieval/
 ├── pack.ts                      # shared greedy packing for optional sources
 └── memory/memory-context.ts     # budgeted, labeled injection
 ```
 
-A write path, session summaries and a persistent index are later slices; no
-`memory-manager` exists until a second responsibility requires one.
+A persistent index is later work; no `memory-manager` exists until a responsibility
+beyond reading, appending and summarizing requires one.
 
 Memory answers:
 
@@ -993,7 +1021,7 @@ Workspace → AgentLoop       ❌
 Tool → Sampler              ❌
 Tool → provider SDK         ❌
 MCP → SessionRuntime        ❌
-Memory → Workspace mutation ❌
+Memory → Workspace mutation ❌  (except appending notes via NoteStorage, Phase 8.2)
 Context → shell execution   ❌
 Runtime → concrete provider ❌
 Runtime → concrete workspace ❌

@@ -17,7 +17,70 @@ export type SessionCliCommand = StorageOptions &
     | { readonly kind: 'list' }
     | { readonly kind: 'show'; readonly sessionId: SessionId }
     | { readonly kind: 'rewind'; readonly sessionId: SessionId; readonly keepTurns: number }
+    | SessionSummarizeCommand
   );
+
+export interface SessionSummarizeCommand {
+  readonly kind: 'summarize';
+  readonly sessionId: SessionId;
+  readonly scope: 'workspace' | 'user';
+  readonly file?: string;
+  readonly provider?: string;
+  readonly model?: string;
+  /** Absolute workspace root; defaults to the session's saved root, then the cwd. */
+  readonly workspace?: string;
+  readonly userMemoryDirectory?: string;
+}
+
+function parseSummarize(
+  sessionIdValue: string | undefined,
+  options: readonly string[],
+  cwd: string,
+): SessionSummarizeCommand {
+  let scope: SessionSummarizeCommand['scope'] = 'workspace';
+  const values: Record<string, string> = {};
+  for (let index = 0; index < options.length; index += 2) {
+    const option = options[index]!;
+    const value = options[index + 1];
+    if (
+      ![
+        '--scope',
+        '--file',
+        '--provider',
+        '--model',
+        '--workspace',
+        '--user-memory-directory',
+      ].includes(option)
+    )
+      throw new CliUsageError(`Unknown option: ${option}`);
+    if (value === undefined || value.startsWith('--'))
+      throw new CliUsageError(`${option} requires a value.`);
+    if (option in values) throw new CliUsageError(`Provide ${option} only once.`);
+    values[option] = value;
+  }
+  if (values['--scope'] !== undefined) {
+    if (values['--scope'] !== 'workspace' && values['--scope'] !== 'user')
+      throw new CliUsageError('--scope must be workspace or user.');
+    scope = values['--scope'];
+  }
+  const file = values['--file'];
+  if (file !== undefined && !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(file))
+    throw new CliUsageError('--file must be a lowercase name without an extension.');
+  return {
+    kind: 'summarize',
+    sessionId: sessionId(sessionIdValue),
+    scope,
+    ...(file === undefined ? {} : { file }),
+    ...(values['--provider'] === undefined ? {} : { provider: values['--provider'] }),
+    ...(values['--model'] === undefined ? {} : { model: values['--model'] }),
+    ...(values['--workspace'] === undefined
+      ? {}
+      : { workspace: resolve(cwd, values['--workspace']) }),
+    ...(values['--user-memory-directory'] === undefined
+      ? {}
+      : { userMemoryDirectory: resolve(cwd, values['--user-memory-directory']) }),
+  };
+}
 function sessionId(value: string | undefined): SessionId {
   if (value === undefined || !validRecordKey(value))
     throw new CliUsageError('Provide a UUID session ID.');
@@ -68,8 +131,10 @@ export function parseSessionCommand(arguments_: readonly string[], cwd: string):
       keepTurns: Number(count),
     };
   }
+  if (remaining[1] === 'summarize')
+    return { ...parseSummarize(remaining[2], remaining.slice(3), cwd), directory };
   throw new CliUsageError(
-    'Use sessions list, sessions show <id>, or sessions rewind <id> --keep-turns <n>.',
+    'Use sessions list, sessions show <id>, sessions rewind <id> --keep-turns <n>, or sessions summarize <id>.',
   );
 }
 
@@ -105,7 +170,7 @@ export async function prepareSessionRun(
 }
 
 export async function runSessionCommand(
-  command: Exclude<SessionCliCommand, { kind: 'run' }>,
+  command: Exclude<SessionCliCommand, { kind: 'run' } | { kind: 'summarize' }>,
   store: SessionStore,
   tracer: TracingHandle['tracer'],
   writeOutput: (text: string) => void,

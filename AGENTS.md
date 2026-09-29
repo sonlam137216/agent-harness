@@ -39,10 +39,13 @@ Phase 6 adds explicit MCP configuration, stdio/Streamable HTTP adapters, bounded
 
 Phase 7.3c (live retrieval evaluation) is deferred until a stronger tool-calling model is
 available. Phase 8.1 adds opt-in Markdown memory notes (workspace and user scopes, BM25,
-spare-budget injection). See `docs/PHASE-8.md`.
+spare-budget injection). Phase 8.2 adds `memory add` and the permission-gated
+`save_memory` tool, which can only append to memory note files. Phase 8.3 adds explicit
+`sessions summarize <id>`. See `docs/PHASE-8.md`.
 
-Implement one roadmap capability at a time. The next planned capability is Phase 8.2,
-the memory write path; do not start another capability until explicitly requested.
+Implement one roadmap capability at a time. Phase 8's planned slices are complete; the
+next roadmap phase is Phase 9, subagents. Do not start another capability until
+explicitly requested.
 Native file mutation and command execution remain unavailable.
 
 Do not implement advanced capabilities before the core end-to-end loop works.

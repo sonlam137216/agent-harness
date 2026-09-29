@@ -10,6 +10,17 @@ bytes read, entries indexed, candidates, `partial_reasons`, duration and outcome
 Workspace read/list spans nest beneath it. Queries, paths, titles and note text are
 never recorded. `context.memory_tokens` counts the complete injected message.
 
+Phase 8.2 adds `memory.record` (scope, source `cli`/`agent`, session ID for agent
+writes, entry bytes, duration, outcome) with a nested `workspace.operation` span
+(`operation=notes.update`, bytes written, normalized error type). Titles, bodies and
+file names are not recorded. `save_memory` calls keep the standard tool span and
+permission decision metadata.
+
+Phase 8.3 adds `memory.summarize` (session ID, scope, turns included/omitted, input
+characters, outcome, normalized error type) with a nested `model.sample` span
+(`model.purpose=session_summary`, usage, stop reason) and the resulting `memory.record`.
+Transcript and summary text are never recorded.
+
 ## Phase 7.2 code retrieval
 
 `context.code_retrieval` is a child of `context.build` and owns optional evidence

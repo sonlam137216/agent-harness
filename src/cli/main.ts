@@ -13,7 +13,16 @@ import { createSampler, SamplerConfigurationError } from '../model/create-sample
 import { ContextError } from '../context/context-budget.js';
 import { SamplingError } from '../model/sampling-types.js';
 import { createTracing, type TracingHandle } from '../observability/tracing.js';
-import { CLI_HELP, CliRunError, CliUsageError, runPhaseOneCli } from './phase-one-cli.js';
+import {
+  CLI_HELP,
+  CliRunError,
+  CliUsageError,
+  createMemoryWriter,
+  runPhaseOneCli,
+} from './phase-one-cli.js';
+import { parseMemoryCommand, runMemoryCommand, runSessionSummaryCommand } from './memory-cli.js';
+import { MemoryWriteError } from '../memory/memory-writer.js';
+import { SessionSummaryError } from '../memory/session-summarizer.js';
 
 function safeErrorMessage(error: unknown): string {
   if (error instanceof EventSubscriberError) return safeErrorMessage(error.cause);
@@ -22,6 +31,8 @@ function safeErrorMessage(error: unknown): string {
     error instanceof SessionFormatError ||
     error instanceof SessionStateError ||
     error instanceof RecordStorageError ||
+    error instanceof MemoryWriteError ||
+    error instanceof SessionSummaryError ||
     error instanceof ContextError ||
     error instanceof CliUsageError ||
     error instanceof CliRunError ||
@@ -44,9 +55,33 @@ async function main(): Promise<void> {
       process.stdout.write(`${CLI_HELP}\n`);
       return;
     }
+    const memoryCommand = parseMemoryCommand(arguments_, process.cwd());
+    if (memoryCommand !== undefined) {
+      tracing = createTracing();
+      await runMemoryCommand(
+        memoryCommand,
+        createMemoryWriter(
+          memoryCommand.workspaceRoot,
+          memoryCommand.userMemoryDirectory,
+          tracing.tracer,
+        ),
+        (text) => process.stdout.write(`${text}\n`),
+      );
+      return;
+    }
     const command = parseSessionCommand(arguments_, process.cwd());
     tracing = createTracing();
     const store = new FileSessionStore(new LocalRecordStorage(command.directory), tracing.tracer);
+    if (command.kind === 'summarize') {
+      process.once('SIGINT', cancel);
+      await runSessionSummaryCommand(command, store, process.cwd(), {
+        createSampler: (provider) => createSampler({ provider, environment: process.env }),
+        tracer: tracing.tracer,
+        writeOutput: (text) => process.stdout.write(`${text}\n`),
+        signal: cancellation.signal,
+      });
+      return;
+    }
     if (command.kind !== 'run') {
       await runSessionCommand(command, store, tracing.tracer, (text) =>
         process.stdout.write(`${text}\n`),

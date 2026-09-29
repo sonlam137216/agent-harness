@@ -428,15 +428,16 @@ Exit criteria:
 
 Goal: preserve useful knowledge across sessions.
 
-Phase 8.1 (read path) is implemented; see [PHASE-8.md](PHASE-8.md).
+Phase 8.1 (read path), 8.2 (write path) and 8.3 (session summaries) are implemented;
+see [PHASE-8.md](PHASE-8.md).
 
 Start simple:
 
 - [x] Markdown memory store
 - [x] workspace memory
 - [x] global (user) memory
-- [ ] write path: CLI command, then permission-gated memory tool (8.2)
-- [ ] session summaries (8.3)
+- [x] write path: `memory add` CLI command and permission-gated `save_memory` tool (8.2)
+- [x] session summaries: explicit `sessions summarize <id>` (8.3)
 - [x] BM25 ranking (in-memory; persistent SQLite FTS deferred until corpus size needs it)
 - [x] memory context source
 - [ ] memory search tool

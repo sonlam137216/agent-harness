@@ -272,10 +272,12 @@ describe('Markdown memory store and context', () => {
       'user',
     );
     expect(JSON.stringify(recalled.session)).not.toContain('versioned JSON');
+    // Memory adds only the permission-gated save_memory tool (Phase 8.2).
     expect(requests[0]!.tools.map((tool) => tool.name)).toEqual([
       'read_file',
       'list_files',
       'search_text',
+      'save_memory',
     ]);
     expect((await run('Why did we choose the session storage format?', false)).finalText).toBe(
       'Unknown.',

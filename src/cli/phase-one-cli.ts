@@ -41,6 +41,24 @@ import { LocalFileSystemCapability } from '../workspace/local-file-system.js';
 import { SkillsSource } from '../skills/skills-source.js';
 import { isSkillName } from '../skills/skill-parser.js';
 import { MarkdownMemoryStore } from '../memory/memory-store.js';
+import { MemoryWriter } from '../memory/memory-writer.js';
+import { SaveMemoryTool } from '../tools/builtin/save-memory.tool.js';
+import { LocalNoteStorage } from '../workspace/local-note-storage.js';
+
+/** Workspace notes live in `.agents/memory`; user notes directly in the user memory root. */
+export function createMemoryWriter(
+  workspaceRoot: string,
+  userMemoryDirectory: string,
+  tracer: TracingHandle['tracer'],
+): MemoryWriter {
+  return new MemoryWriter(
+    {
+      workspace: new LocalNoteStorage({ root: workspaceRoot, directory: '.agents/memory', tracer }),
+      user: new LocalNoteStorage({ root: userMemoryDirectory, directory: '.', tracer }),
+    },
+    tracer,
+  );
+}
 
 const MODEL_ENVIRONMENT_VARIABLE = 'AGENT_HARNESS_MODEL';
 const PROVIDER_ENVIRONMENT_VARIABLE = 'AGENT_HARNESS_PROVIDER';
@@ -51,6 +69,9 @@ export const CLI_HELP = `Usage:
   pnpm cli -- sessions list
   pnpm cli -- sessions show <session-id>
   pnpm cli -- sessions rewind <session-id> --keep-turns <n>
+  pnpm cli -- memory add --title <title> [--scope workspace|user] [--file <name>] "<note>"
+  pnpm cli -- sessions summarize <session-id> [--scope workspace|user] [--file <name>]
+             [--provider <p>] [--model <id>] (defaults: the session's saved model; file "sessions")
 
 Options:
   --session-dir <path>  Session data directory (default: ~/.agent-harness/sessions)
@@ -63,7 +84,8 @@ Options:
   --rules-directory <p> Workspace-relative directory for AGENTS.md scope (default: .)
   --retrieval-root <p>  Opt in to lexical code context within this root (repeatable, max 8)
   --retrieval-tokens <n> Optional code context cap (default: 4096; requires a root)
-  --memory              Opt in to Markdown memory notes (.agents/memory and user memory)
+  --memory              Opt in to Markdown memory notes (.agents/memory and user memory);
+                        also offers save_memory (write; allow with --allow-tool save_memory)
   --memory-tokens <n>   Optional memory context cap (default: 2048; requires --memory)
   --user-memory-directory <path> User memory root (default: ~/.agents/memory; requires --memory)
   --skill <name>        Invoke a skill for this turn (repeatable; also accepts $name in prompt)
@@ -371,6 +393,14 @@ export async function runPhaseOneCli(
   registry.register(new ReadFileTool(fileSystem));
   registry.register(new ListFilesTool(fileSystem));
   registry.register(new SearchTextTool(fileSystem));
+  const userMemoryDirectory = options.memory?.userDirectory ?? join(homedir(), '.agents', 'memory');
+  if (options.memory !== undefined)
+    // accessKind=write: denied by default; enable with --allow-tool save_memory or ask mode.
+    registry.register(
+      new SaveMemoryTool(
+        createMemoryWriter(options.workspaceRoot, userMemoryDirectory, options.tracer),
+      ),
+    );
 
   let mcp: McpManager | undefined;
   if (options.mcpConfig !== undefined) {
@@ -435,8 +465,7 @@ export async function runPhaseOneCli(
                     scope: 'user',
                     // Separate contained root, never registered as a model-facing file tool.
                     files: new LocalFileSystemCapability({
-                      workspaceRoot:
-                        options.memory.userDirectory ?? join(homedir(), '.agents', 'memory'),
+                      workspaceRoot: userMemoryDirectory,
                       tracer: options.tracer,
                       maxReadBytes: 65_536,
                     }),
