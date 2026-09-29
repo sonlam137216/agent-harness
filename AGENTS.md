@@ -37,16 +37,18 @@ Phase 5 adds bounded project/user skill discovery, explicit and opt-in automatic
 
 Phase 6 adds explicit MCP configuration, stdio/Streamable HTTP adapters, bounded BM25 catalog search, and target-authorized invocation. See `docs/PHASE-6.md`. Native tools remain read-only; Workspace owns only the application-side process capability needed for stdio.
 
-Implement one roadmap capability at a time. The next planned capability is Phase 7.3c,
-live retrieval evaluation; do not start another capability until explicitly requested.
+Phase 7.3c (live retrieval evaluation) is deferred until a stronger tool-calling model is
+available. Phase 8.1 adds opt-in Markdown memory notes (workspace and user scopes, BM25,
+spare-budget injection). See `docs/PHASE-8.md`.
+
+Implement one roadmap capability at a time. The next planned capability is Phase 8.2,
+the memory write path; do not start another capability until explicitly requested.
 Native file mutation and command execution remain unavailable.
 
 Do not implement advanced capabilities before the core end-to-end loop works.
 
 Unless explicitly requested, do not implement:
 
-- MCP
-- memory
 - subagents
 - worktrees
 - sandboxing

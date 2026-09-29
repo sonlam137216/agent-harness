@@ -1,5 +1,15 @@
 # Observability and Tracing Architecture
 
+## Phase 8.1 memory
+
+`context.memory` is a child of `context.build` and owns memory selection. It records
+session/turn/model-call IDs, token allowance, candidates, selected items, selected
+tokens, budget omissions, partial flag, skip reason (`budget`/`query`), duration and
+normalized outcome. `memory.search` is its child and owns discovery/ranking: files read,
+bytes read, entries indexed, candidates, `partial_reasons`, duration and outcome.
+Workspace read/list spans nest beneath it. Queries, paths, titles and note text are
+never recorded. `context.memory_tokens` counts the complete injected message.
+
 ## Phase 7.2 code retrieval
 
 `context.code_retrieval` is a child of `context.build` and owns optional evidence

@@ -11,6 +11,7 @@ import {
   TurnRetrievalCache,
   type CodeRetrievalOptions,
 } from './retrieval/code/code-context.js';
+import { memoryContext, type MemoryContextOptions } from './retrieval/memory/memory-context.js';
 import {
   checkContextCancellation,
   ContextError,
@@ -46,6 +47,8 @@ export interface ContextBuilderOptions {
   readonly additionalSources?: readonly ContextSource[];
   /** Optional code evidence uses only space left after required context fits. */
   readonly codeRetrieval?: CodeRetrievalOptions;
+  /** Optional memory notes; packed before code evidence, also only into spare space. */
+  readonly memory?: MemoryContextOptions;
   /** Enables model-assisted compaction. Without a sampler, irreducible overflow is an error. */
   readonly sampler?: Sampler;
   readonly toolResultMaxChars?: number;
@@ -82,6 +85,7 @@ export class ContextBuilder {
   readonly #conversation = new ConversationSource();
   readonly #codeRetrieval: CodeRetrievalOptions | undefined;
   readonly #retrievalCache = new TurnRetrievalCache();
+  readonly #memory: MemoryContextOptions | undefined;
 
   public constructor(
     private readonly tracer: TracingHandle['tracer'],
@@ -98,9 +102,13 @@ export class ContextBuilder {
     this.#codeRetrieval = options.codeRetrieval;
     if (this.#codeRetrieval !== undefined)
       positiveInteger('retrieval.maxTokens', this.#codeRetrieval.maxTokens ?? 4096);
+    this.#memory = options.memory;
+    if (this.#memory !== undefined)
+      positiveInteger('memory.maxTokens', this.#memory.maxTokens ?? 2048);
     const names = new Set([
       'conversation',
       ...(this.#codeRetrieval === undefined ? [] : ['retrieval']),
+      ...(this.#memory === undefined ? [] : ['memory']),
     ]);
     for (const source of this.#sources) {
       if (!/^[a-z][a-z0-9_]{0,63}$/u.test(source.name) || names.has(source.name))
@@ -314,13 +322,29 @@ export class ContextBuilder {
             'budget_exceeded',
             'Context exceeds the input budget and cannot be reduced safely.',
           );
+        // Optional sources share whatever remains; memory is smaller and is packed first.
+        const memoryMessages =
+          this.#memory === undefined
+            ? []
+            : await memoryContext(
+                this.#memory,
+                { ...input, session },
+                Math.min(this.#memory.maxTokens ?? 2048, inputLimit - total(messages)),
+                this.#counter,
+                this.tracer,
+              );
+        checkContextCancellation(input);
+        const memoryTokens = contributionTokens(this.#counter, memoryMessages, []);
         const retrievalMessages =
           this.#codeRetrieval === undefined
             ? []
             : await codeContext(
                 this.#codeRetrieval,
                 { ...input, session },
-                Math.min(this.#codeRetrieval.maxTokens ?? 4096, inputLimit - total(messages)),
+                Math.min(
+                  this.#codeRetrieval.maxTokens ?? 4096,
+                  inputLimit - total(messages) - memoryTokens,
+                ),
                 this.#counter,
                 this.tracer,
                 this.#retrievalCache,
@@ -330,6 +354,7 @@ export class ContextBuilder {
         const sources = {
           ...sourceTokens,
           conversation: contributionTokens(this.#counter, messages, []),
+          ...(this.#memory === undefined ? {} : { memory: memoryTokens }),
           ...(this.#codeRetrieval === undefined ? {} : { retrieval: retrievalTokens }),
         };
         const accounting: ContextAccounting = {
@@ -337,7 +362,7 @@ export class ContextBuilder {
           estimated: true,
           inputLimit,
           baselineTokens,
-          totalTokens: total(messages) + retrievalTokens,
+          totalTokens: total(messages) + memoryTokens + retrievalTokens,
           framingTokens: REQUEST_FRAMING_TOKENS,
           sources,
           prunedResults,
@@ -346,7 +371,7 @@ export class ContextBuilder {
         const request: ModelRequest = {
           modelCallId: input.modelCallId,
           modelId: input.agent.model.modelId,
-          messages: [...fixedMessages, ...retrievalMessages, ...messages],
+          messages: [...fixedMessages, ...memoryMessages, ...retrievalMessages, ...messages],
           tools,
           maxOutputTokens: this.#budget.outputReserveTokens,
         };

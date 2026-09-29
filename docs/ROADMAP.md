@@ -369,6 +369,8 @@ Goal: reduce repository exploration cost.
 - [x] 7.3a: coverage signals separated from selection limits
 - [x] 7.3b: one retrieval scan per turn (in-memory per-turn cache)
 - [ ] 7.3c: measured live comparison with human-reviewed correctness and evidence coverage
+  (deferred: a 2026-09-29 pilot with qwen3:1.7b made no read_file calls in either mode,
+  so it could not test read reduction; rerun with a stronger tool-calling model)
 
 Phase 7.1–7.2 and the 7.3a–b preparation are implemented; see [PHASE-7.md](PHASE-7.md). Scripted runs verify
 accounting, not model quality or token savings. No live-model baseline has been
@@ -426,16 +428,20 @@ Exit criteria:
 
 Goal: preserve useful knowledge across sessions.
 
+Phase 8.1 (read path) is implemented; see [PHASE-8.md](PHASE-8.md).
+
 Start simple:
 
-- [ ] Markdown memory store
-- [ ] workspace memory
-- [ ] global memory
-- [ ] session summaries
-- [ ] SQLite FTS/BM25
-- [ ] memory search tool/context source
-- [ ] first-turn retrieval
-- [ ] post-compaction retrieval
+- [x] Markdown memory store
+- [x] workspace memory
+- [x] global (user) memory
+- [ ] write path: CLI command, then permission-gated memory tool (8.2)
+- [ ] session summaries (8.3)
+- [x] BM25 ranking (in-memory; persistent SQLite FTS deferred until corpus size needs it)
+- [x] memory context source
+- [ ] memory search tool
+- [x] first-turn retrieval (memory is selected for every turn from its user message)
+- [x] post-compaction retrieval (memory is reloaded from files on every build, independent of the transcript)
 
 Later:
 

@@ -1,14 +1,10 @@
 import { SpanStatusCode } from '@opentelemetry/api';
 import { SamplingError, type ModelMessage } from '../../../model/sampling-types.js';
 import type { TracingHandle } from '../../../observability/tracing.js';
-import {
-  checkContextCancellation,
-  ContextError,
-  contributionTokens,
-  type TokenCounter,
-} from '../../context-budget.js';
+import { checkContextCancellation, ContextError, type TokenCounter } from '../../context-budget.js';
 import type { ContextSourceInput } from '../../context-source.js';
 import type { ModelCallId } from '../../../ids.js';
+import { packRanked } from '../pack.js';
 import type { CodeCandidate, CodeRetrievalResult, CodeRetriever } from './code-retriever.js';
 
 export interface CodeRetrievalOptions {
@@ -101,27 +97,25 @@ export async function codeContext(
             }),
         },
       ];
-      const selected: CodeCandidate[] = [];
-      for (const candidate of result.candidates) {
-        checkContextCancellation(input);
-        if (contributionTokens(counter, render([...selected, candidate]), []) <= allowance)
-          selected.push(candidate);
-      }
-      const messages =
-        selected.length > 0 || result.partialReasons.length > 0 ? render(selected) : [];
-      const fits = contributionTokens(counter, messages, []) <= allowance;
-      const packed = fits ? messages : [];
+      const packed = packRanked(
+        result.candidates,
+        render,
+        allowance,
+        counter,
+        input,
+        result.partialReasons.length > 0,
+      );
       span.setAttributes({
         success: true,
         candidates: result.candidates.length,
-        selected_items: fits ? selected.length : 0,
-        selected_files: fits ? new Set(selected.map((item) => item.path)).size : 0,
-        selected_tokens: contributionTokens(counter, packed, []),
+        selected_items: packed.selected.length,
+        selected_files: new Set(packed.selected.map((item) => item.path)).size,
+        selected_tokens: packed.tokens,
         partial: result.partialReasons.length > 0,
         selection_limited: result.selectionLimits.length > 0,
-        budget_omitted_items: result.candidates.length - (fits ? selected.length : 0),
+        budget_omitted_items: result.candidates.length - packed.selected.length,
       });
-      return packed;
+      return packed.messages;
     } catch (error) {
       span.setAttributes({
         success: false,

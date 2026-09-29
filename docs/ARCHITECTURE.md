@@ -18,6 +18,18 @@ This document describes both the small current implementation shape and the inte
 
 ## 2. Target High-Level Architecture
 
+### Phase 8.1 memory decision
+
+Memory is a new `src/memory/` module that Context depends on (Context → Memory), never
+the reverse direction into Runtime. `MarkdownMemoryStore` discovers immediate `*.md`
+files in a workspace root (`.agents/memory`) and a separately contained user root through
+read-only FileSystemCapability ports, splits them into `## ` entries and ranks them with
+in-memory BM25. Context's `memoryContext` owns packing: memory takes only spare input
+budget after required context and compaction, is packed before code excerpts, and is a
+labeled untrusted user-role message that is never persisted into Session. A shared
+`packRanked` helper serves both optional sources. No dependency, database, write path or
+Runtime/Sampler/Session change is added. See [PHASE-8.md](PHASE-8.md).
+
 ### Phase 7.2 lexical retrieval decision
 
 An opt-in `CodeRetriever` boundary under Context returns bounded, ranked source
@@ -729,15 +741,21 @@ See [PHASE-5.md](PHASE-5.md) for the supported format, selection and limits.
 
 ### 4.11 Memory
 
-Later phase:
+Current implementation (Phase 8.1, read path):
 
 ```text
 src/memory/
-├── memory-store.ts
-├── memory-index.ts
-├── memory-search.ts
-└── memory-manager.ts
+├── memory-parser.ts   # `## ` entries with line provenance
+├── memory-index.ts    # deterministic in-memory BM25
+└── memory-store.ts    # bounded workspace/user discovery and search
+
+src/context/retrieval/
+├── pack.ts                      # shared greedy packing for optional sources
+└── memory/memory-context.ts     # budgeted, labeled injection
 ```
+
+A write path, session summaries and a persistent index are later slices; no
+`memory-manager` exists until a second responsibility requires one.
 
 Memory answers:
 

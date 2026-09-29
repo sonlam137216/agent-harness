@@ -40,6 +40,7 @@ import { ToolRegistry } from '../tools/tool-registry.js';
 import { LocalFileSystemCapability } from '../workspace/local-file-system.js';
 import { SkillsSource } from '../skills/skills-source.js';
 import { isSkillName } from '../skills/skill-parser.js';
+import { MarkdownMemoryStore } from '../memory/memory-store.js';
 
 const MODEL_ENVIRONMENT_VARIABLE = 'AGENT_HARNESS_MODEL';
 const PROVIDER_ENVIRONMENT_VARIABLE = 'AGENT_HARNESS_PROVIDER';
@@ -62,6 +63,9 @@ Options:
   --rules-directory <p> Workspace-relative directory for AGENTS.md scope (default: .)
   --retrieval-root <p>  Opt in to lexical code context within this root (repeatable, max 8)
   --retrieval-tokens <n> Optional code context cap (default: 4096; requires a root)
+  --memory              Opt in to Markdown memory notes (.agents/memory and user memory)
+  --memory-tokens <n>   Optional memory context cap (default: 2048; requires --memory)
+  --user-memory-directory <path> User memory root (default: ~/.agents/memory; requires --memory)
   --skill <name>        Invoke a skill for this turn (repeatable; also accepts $name in prompt)
   --user-skills-directory <path> User skill root (default: ~/.agents/skills)
   --mcp-config <path>   Explicit workspace-relative MCP server configuration for this run
@@ -88,6 +92,7 @@ export interface PhaseOneCliConfig {
   readonly contextBudget?: ContextBudget;
   readonly rulesDirectory?: string;
   readonly retrieval?: { readonly roots: readonly string[]; readonly maxTokens?: number };
+  readonly memory?: { readonly maxTokens?: number; readonly userDirectory?: string };
   readonly permissionMode?: PermissionMode;
   readonly permissionRules?: readonly PermissionRule[];
   readonly skillNames?: readonly string[];
@@ -156,6 +161,9 @@ export function parsePhaseOneCliArguments(
   let rulesDirectory: string | undefined;
   const codeRoots: string[] = [];
   let retrievalTokens: number | undefined;
+  let memoryEnabled = false;
+  let memoryTokens: number | undefined;
+  let userMemoryDirectory: string | undefined;
   let workspace = currentDirectory;
   let permissionMode: PermissionMode | undefined;
   const skillNames: string[] = [];
@@ -218,6 +226,25 @@ export function parsePhaseOneCliArguments(
       if (!/^[1-9][0-9]*$/u.test(value) || !Number.isSafeInteger(Number(value)))
         throw new CliUsageError('--retrieval-tokens requires a positive integer.');
       retrievalTokens = Number(value);
+      index += 1;
+      continue;
+    }
+    if (argument === '--memory') {
+      memoryEnabled = true;
+      continue;
+    }
+    if (argument === '--memory-tokens') {
+      const value = optionValue(arguments_, index, argument);
+      if (!/^[1-9][0-9]*$/u.test(value) || !Number.isSafeInteger(Number(value)))
+        throw new CliUsageError('--memory-tokens requires a positive integer.');
+      memoryTokens = Number(value);
+      index += 1;
+      continue;
+    }
+    if (argument === '--user-memory-directory') {
+      const directory = optionValue(arguments_, index, argument);
+      if (directory.trim() === '') throw new CliUsageError('Provide a user memory directory.');
+      userMemoryDirectory = resolve(currentDirectory, directory);
       index += 1;
       continue;
     }
@@ -294,6 +321,8 @@ export function parsePhaseOneCliArguments(
       );
     }
   }
+  if (!memoryEnabled && (memoryTokens !== undefined || userMemoryDirectory !== undefined))
+    throw new CliUsageError('--memory-tokens and --user-memory-directory require --memory.');
   if (prompt.length === 0) throw new CliUsageError('Provide a non-empty user prompt.');
   try {
     validateBudget({ windowTokens, outputReserveTokens });
@@ -313,6 +342,14 @@ export function parsePhaseOneCliArguments(
       ...(budgetProvided ? { contextBudget: { windowTokens, outputReserveTokens } } : {}),
       ...(rulesDirectory === undefined ? {} : { rulesDirectory }),
       ...(retrieval === undefined ? {} : { retrieval }),
+      ...(memoryEnabled
+        ? {
+            memory: {
+              ...(memoryTokens === undefined ? {} : { maxTokens: memoryTokens }),
+              ...(userMemoryDirectory === undefined ? {} : { userDirectory: userMemoryDirectory }),
+            },
+          }
+        : {}),
       ...(skillNames.length === 0 ? {} : { skillNames: [...new Set(skillNames)] }),
       ...(userSkillsDirectory === undefined ? {} : { userSkillsDirectory }),
       ...(autoSkills ? { autoSkills } : {}),
@@ -385,6 +422,32 @@ export async function runPhaseOneCli(
               ...(options.retrieval.maxTokens === undefined
                 ? {}
                 : { maxTokens: options.retrieval.maxTokens }),
+            },
+          }),
+      ...(options.memory === undefined
+        ? {}
+        : {
+            memory: {
+              store: new MarkdownMemoryStore(
+                [
+                  { scope: 'workspace', files: fileSystem, directory: '.agents/memory' },
+                  {
+                    scope: 'user',
+                    // Separate contained root, never registered as a model-facing file tool.
+                    files: new LocalFileSystemCapability({
+                      workspaceRoot:
+                        options.memory.userDirectory ?? join(homedir(), '.agents', 'memory'),
+                      tracer: options.tracer,
+                      maxReadBytes: 65_536,
+                    }),
+                    directory: '.',
+                  },
+                ],
+                options.tracer,
+              ),
+              ...(options.memory.maxTokens === undefined
+                ? {}
+                : { maxTokens: options.memory.maxTokens }),
             },
           }),
       ...(options.contextBudget === undefined ? {} : { budget: options.contextBudget }),

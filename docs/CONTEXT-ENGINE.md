@@ -18,13 +18,20 @@ Oversized excerpts are omitted, never split to force them into the request.
 No retrieval content can trigger additional compaction or evict required context.
 
 Excerpts are labeled untrusted repository data in a user-role message before the
-conversation, preserving all original message and call/result groups. They are
-rebuilt from current files on each context build, not appended to Session or stored
-in checkpoints. CLI roots must be supplied again on resume. Errors abort the build
+conversation, preserving all original message and call/result groups. Phase 7.3b
+scans once per turn and repacks that scan on later builds of the turn; excerpts are
+never appended to Session or stored in checkpoints. CLI roots must be supplied again on resume. Errors abort the build
 without committing a prospective checkpoint; cancellation/deadlines propagate.
 `accounting.sources.retrieval` and `context.retrieval_tokens` count the full injected
 message including labels/metadata. `baselineTokens` remains the pre-retrieval,
 pre-pruning baseline; `totalTokens` includes selected excerpts. See [PHASE-7.md](PHASE-7.md).
+
+Phase 8.1 adds optional `ContextBuilderOptions.memory` on the same spare-budget terms:
+memory takes `min(maxTokens, remaining input)` (default cap 2048) first, then code
+retrieval receives what is left. Memory notes are a labeled user-role message placed
+before code excerpts, reloaded from files on every build and never written to Session.
+They count as `accounting.sources.memory` / `context.memory_tokens`. See
+[PHASE-8.md](PHASE-8.md).
 
 ## Configuration
 

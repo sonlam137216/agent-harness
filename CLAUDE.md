@@ -12,10 +12,11 @@ disagree, stop and update the architecture intentionally.
 ## Project summary
 
 Learning-oriented AI coding-agent harness in TypeScript (strict, ESM, Node >= 22, pnpm).
-Phases 0–6 are committed; Phase 7.1 (exploration benchmark) and 7.2 (lexical code retrieval)
-and 7.3a–b (coverage signals, per-turn scan cache) are implemented. The next planned capability
-is Phase 7.3c (live retrieval evaluation). Do not
-start another capability unless explicitly requested. Native tools are read-only.
+Phases 0–6 are committed; Phase 7.1–7.3b (benchmark, lexical code retrieval, coverage
+signals, per-turn scan cache) and Phase 8.1 (opt-in Markdown memory read path) are
+implemented. Phase 7.3c (live evaluation) is deferred pending a stronger tool-calling model.
+The next planned capability is Phase 8.2 (memory write path). Do not start another
+capability unless explicitly requested. Native tools are read-only.
 
 Main flow: `cli` (composition root) → `runtime/SessionRuntime` → `runtime/AgentLoop` →
 `context/ContextBuilder` + `model/Sampler` + `tools/ToolBridge` → `workspace` / `mcp`.
