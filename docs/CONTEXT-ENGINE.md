@@ -9,6 +9,23 @@ project/user workflows, applies explicit or opt-in automatic selection, and inje
 after project rules. Skill contributions count as `context.skills_tokens` and are mandatory during
 budget enforcement. See [PHASE-5.md](PHASE-5.md) for invocation, precedence and format limits.
 
+Phase 7.2 adds optional `ContextBuilderOptions.codeRetrieval`, separate from
+mandatory `additionalSources`. Required context fits first, with the existing
+pruning/compaction behavior unchanged. Context then retrieves code from the active
+user request and packs complete excerpts within `min(maxTokens, remaining input)`.
+The default cap is 4096 estimated units; zero remaining space skips retrieval.
+Oversized excerpts are omitted, never split to force them into the request.
+No retrieval content can trigger additional compaction or evict required context.
+
+Excerpts are labeled untrusted repository data in a user-role message before the
+conversation, preserving all original message and call/result groups. They are
+rebuilt from current files on each context build, not appended to Session or stored
+in checkpoints. CLI roots must be supplied again on resume. Errors abort the build
+without committing a prospective checkpoint; cancellation/deadlines propagate.
+`accounting.sources.retrieval` and `context.retrieval_tokens` count the full injected
+message including labels/metadata. `baselineTokens` remains the pre-retrieval,
+pre-pruning baseline; `totalTokens` includes selected excerpts. See [PHASE-7.md](PHASE-7.md).
+
 ## Configuration
 
 ```sh

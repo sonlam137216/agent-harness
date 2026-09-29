@@ -3,6 +3,11 @@
 Assessment date: 2026-09-28. This is a planning document, not an implementation
 of Phase 7 or authorization to begin it.
 
+Delivery update: Phase 6 was committed as `8b0aa1b`. Phase 7.1–7.2 are implemented;
+see [PHASE-7.md](PHASE-7.md) for the benchmark and bounded lexical retrieval. The
+assessment below is the historical pre-commit snapshot. Phase 7.3 and later remain
+proposals; live quality and savings have not yet been established.
+
 ## Verified baseline
 
 The working tree implements Phase 0–6. HEAD is `cd3f247`

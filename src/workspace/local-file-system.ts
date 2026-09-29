@@ -10,6 +10,7 @@ import {
   type FileSystemEntry,
   type FileSystemEntryKind,
   type FileSystemOperationOptions,
+  type FileReadOptions,
   type ReadFileResult,
 } from './filesystem-capability.js';
 
@@ -89,9 +90,15 @@ export class LocalFileSystemCapability implements FileSystemCapability {
 
   public readonly readFile = async (
     requestedPath: string,
-    options: FileSystemOperationOptions = {},
+    options: FileReadOptions = {},
   ): Promise<ReadFileResult> =>
     this.#withOperation('filesystem.read_file', requestedPath, options.signal, async (span) => {
+      const maxBytes = Math.min(
+        this.#maxReadBytes,
+        options.maxBytes === undefined
+          ? this.#maxReadBytes
+          : requirePositiveInteger(options.maxBytes, 'maxBytes'),
+      );
       const { root, target } = await this.#resolveContainedPath(requestedPath, options.signal);
       const file = await open(target, 'r');
 
@@ -104,14 +111,14 @@ export class LocalFileSystemCapability implements FileSystemCapability {
             requestedPath,
           });
         }
-        if (stats.size > this.#maxReadBytes) {
+        if (stats.size > maxBytes) {
           throw new FileSystemError('The requested file exceeds the configured read limit.', {
             code: 'output_limit_exceeded',
             requestedPath,
           });
         }
 
-        const buffer = Buffer.alloc(this.#maxReadBytes + 1);
+        const buffer = Buffer.alloc(maxBytes + 1);
         let bytesRead = 0;
         while (bytesRead < buffer.length) {
           this.#throwIfCancelled(requestedPath, options.signal);
@@ -121,7 +128,7 @@ export class LocalFileSystemCapability implements FileSystemCapability {
         }
         this.#throwIfCancelled(requestedPath, options.signal);
 
-        if (bytesRead > this.#maxReadBytes) {
+        if (bytesRead > maxBytes) {
           throw new FileSystemError('The requested file exceeds the configured read limit.', {
             code: 'output_limit_exceeded',
             requestedPath,

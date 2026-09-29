@@ -1,5 +1,45 @@
 # Observability and Tracing Architecture
 
+## Phase 7.2 code retrieval
+
+`context.code_retrieval` is a child of `context.build` and owns optional evidence
+selection. It records session/turn/model-call IDs, token allowance, selected items,
+selected files, selected tokens, candidates, budget omissions, partial flag,
+skip reason, duration and normalized outcome. `retrieval.code` is its child and
+owns lexical scanning/ranking: files considered (attempted eligible reads), entries
+visited, bytes successfully read, candidate count, partial reasons, duration and
+normalized outcome. Workspace read/list spans remain nested beneath scanning.
+
+`cache.enabled=false` describes fresh reads; no cache hits or misses are fabricated.
+No queries, paths, excerpts or raw exceptions are recorded. Scan bounds are partial
+success, while parent cancellation/deadline and I/O failures are errors. Selection
+success does not by itself imply that model sampling occurred. Context's existing
+`context.retrieval_tokens` includes the complete message. Benchmark reports expose
+aggregate scan/selection counters in addition to all underlying filesystem work.
+
+## Phase 7.1 benchmark reporting
+
+The development-only exploration runner aggregates existing in-memory spans from
+the normal CLI path. It introduces no production spans or payload logging.
+`context.build` supplies successful source contributions and failed-build counts;
+`tool.execute` supplies calls/errors; `workspace.operation` supplies read attempts,
+successful reads, bytes and directory-list attempts. These include Context-owned
+rules/skills discovery, so filesystem work is not confused with model tool calls.
+
+A Sampler decorator counts every attempted request's estimated serialized size
+and sums usage from every returned response, including compaction. Missing or
+failed responses make usage partial; provider-internal transport retries cannot
+be measured as billed usage. Scripted usage is null, never synthetic zero cost.
+Normal context source totals exclude compaction requests; the all-request estimate
+includes them. Missing tracing is null metrics and makes the CLI exit nonzero.
+
+Reports retain session/turn/trace correlation, fixture and task-set hashes,
+configuration, per-run outcome, timing and evaluation rubric. Expected fixture
+paths are static evaluator metadata. Generated answers are excluded unless
+`--include-answers` is selected for human review. No raw exceptions, credentials,
+environment values, tool results or prompts are copied into reports.
+See [PHASE-7.md](PHASE-7.md) for interpretation and reproducibility limits.
+
 ## 1. Goal
 
 Observability should answer:

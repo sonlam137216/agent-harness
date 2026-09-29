@@ -2,6 +2,11 @@ export interface FileSystemOperationOptions {
   readonly signal?: AbortSignal;
 }
 
+export interface FileReadOptions extends FileSystemOperationOptions {
+  /** Positive per-read content limit; cannot increase the adapter's own limit. */
+  readonly maxBytes?: number;
+}
+
 export interface ReadFileResult {
   /** Workspace-relative path using forward slashes. */
   readonly path: string;
@@ -25,10 +30,7 @@ export interface FileSystemEntry {
  * `output_limit_exceeded` instead of returning unbounded or silently partial data.
  */
 export interface FileSystemCapability {
-  readonly readFile: (
-    path: string,
-    options?: FileSystemOperationOptions,
-  ) => Promise<ReadFileResult>;
+  readonly readFile: (path: string, options?: FileReadOptions) => Promise<ReadFileResult>;
   readonly listDirectory: (
     path: string,
     options?: FileSystemOperationOptions,

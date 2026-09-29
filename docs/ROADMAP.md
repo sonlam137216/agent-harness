@@ -364,7 +364,15 @@ can be available while only a small stable tool surface is always sent to the mo
 
 Goal: reduce repository exploration cost.
 
-Create:
+- [x] 7.1: versioned exploration tasks, hashed fixture, scripted benchmark and opt-in live reporting
+- [x] 7.2: opt-in bounded lexical retrieval with optional context budgeting
+- [ ] 7.3: measured comparison with human-reviewed correctness and evidence coverage
+
+Phase 7.1–7.2 are implemented; see [PHASE-7.md](PHASE-7.md). Scripted runs verify
+accounting, not model quality or token savings. No live-model baseline has been
+claimed. The remaining sequence is described in [PHASE-7-PLAN.md](PHASE-7-PLAN.md).
+
+Create with the retrieval slice:
 
 ```text
 src/context/retrieval/code/
@@ -372,7 +380,7 @@ src/context/retrieval/code/
 
 Potential adapters:
 
-- [ ] lexical code search
+- [x] lexical code search
 - [ ] symbol index
 - [ ] AST index
 - [ ] dependency graph
@@ -396,12 +404,14 @@ Model
 
 Metrics:
 
-- [ ] retrieved token count
-- [ ] source token contribution
-- [ ] files considered
-- [ ] files selected
-- [ ] retrieval latency
+- [x] retrieved token count
+- [x] source token contribution
+- [x] files considered
+- [x] files selected
+- [x] retrieval latency
 - [ ] cache hit/miss
+
+Caching is disabled in 7.2; hit/miss metrics remain deferred with a cache implementation.
 
 Exit criteria:
 

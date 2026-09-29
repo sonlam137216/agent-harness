@@ -2,6 +2,10 @@
 
 Ngày đánh giá: 20/09/2026.
 
+Cập nhật triển khai: Phase 7.1 (benchmark exploration) và Phase 7.2 (bounded lexical
+retrieval) đã hoàn thành; xem [PHASE-7.md](PHASE-7.md). Đánh giá so sánh với model
+thật và hiệu quả tiết kiệm token vẫn thuộc Phase 7.3.
+
 Cập nhật 28/09/2026: đánh giá working tree Phase 0–6 và đề xuất Phase 7 tại
 [PHASE-7-PLAN.md](PHASE-7-PLAN.md). `pnpm validate` đạt 37 test files / 237 tests,
 build và smoke persistence. Phase 7 chưa được triển khai.

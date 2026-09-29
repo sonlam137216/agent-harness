@@ -18,6 +18,34 @@ This document describes both the small current implementation shape and the inte
 
 ## 2. Target High-Level Architecture
 
+### Phase 7.2 lexical retrieval decision
+
+An opt-in `CodeRetriever` boundary under Context returns bounded, ranked source
+excerpts through Workspace's read-only filesystem port. ContextBuilder packs them
+only after the existing required-context, pruning and compaction path succeeds;
+retrieval cannot trigger compaction or displace required context. CLI composition
+supplies explicit roots within the selected project-rule scope and a token cap.
+Retrieval is a projection, not persisted transcript or an authorization mechanism.
+No Runtime, Sampler or Session schema change is needed. Workspace adds an optional
+per-read byte limit so aggregate scanning budgets can bound actual reads.
+
+The initial adapter uses deterministic lexical terms and bounded line windows,
+fresh reads, no external dependencies and no cache. It skips symlinks, excluded
+paths and subtrees with unloaded nested rules. Scan bounds produce partial-coverage
+metadata; I/O/containment failures surface as normalized Context errors. See
+[PHASE-7.md](PHASE-7.md) for the contract and CLI configuration.
+
+### Phase 7.1 benchmark decision
+
+Exploration measurement is development tooling under `test/benchmarks/exploration`,
+not a new production subsystem. It composes the existing read-only CLI, Sampler,
+SessionRuntime and in-memory tracing against a hashed, bounded source fixture.
+Fixture setup and report output belong to the test driver; harness file access
+continues through Workspace. No agent-loop, permission or model contract changes
+are required. Scripted workloads verify accounting; explicit live runs measure
+model behavior, with answer correctness reserved for rubric-based human review.
+No retrieval adapter is introduced in this slice. See [PHASE-7.md](PHASE-7.md).
+
 ### Phase 4 implementation decision
 
 Durability uses one versioned JSON file per session, behind the existing SessionStore port.

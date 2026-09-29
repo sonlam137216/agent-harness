@@ -16,6 +16,8 @@ import { homedir } from 'node:os';
 
 import type { AgentDefinition } from '../agent/agent-definition.js';
 import { ContextBuilder } from '../context/context-builder.js';
+import { LexicalCodeRetriever } from '../context/retrieval/code/lexical-code-retriever.js';
+import { retrievalRoots } from '../context/retrieval/code/code-retriever.js';
 import {
   DEFAULT_CONTEXT_BUDGET,
   validateBudget,
@@ -58,6 +60,8 @@ Options:
   --context-window <n>  Context window estimate (default: 32768; configure for your model)
   --output-reserve <n>  Maximum output tokens reserved (default: 4096)
   --rules-directory <p> Workspace-relative directory for AGENTS.md scope (default: .)
+  --retrieval-root <p>  Opt in to lexical code context within this root (repeatable, max 8)
+  --retrieval-tokens <n> Optional code context cap (default: 4096; requires a root)
   --skill <name>        Invoke a skill for this turn (repeatable; also accepts $name in prompt)
   --user-skills-directory <path> User skill root (default: ~/.agents/skills)
   --mcp-config <path>   Explicit workspace-relative MCP server configuration for this run
@@ -83,6 +87,7 @@ export interface PhaseOneCliConfig {
   readonly workspaceRoot: string;
   readonly contextBudget?: ContextBudget;
   readonly rulesDirectory?: string;
+  readonly retrieval?: { readonly roots: readonly string[]; readonly maxTokens?: number };
   readonly permissionMode?: PermissionMode;
   readonly permissionRules?: readonly PermissionRule[];
   readonly skillNames?: readonly string[];
@@ -149,6 +154,8 @@ export function parsePhaseOneCliArguments(
   let outputReserveTokens = DEFAULT_CONTEXT_BUDGET.outputReserveTokens;
   let budgetProvided = false;
   let rulesDirectory: string | undefined;
+  const codeRoots: string[] = [];
+  let retrievalTokens: number | undefined;
   let workspace = currentDirectory;
   let permissionMode: PermissionMode | undefined;
   const skillNames: string[] = [];
@@ -198,6 +205,19 @@ export function parsePhaseOneCliArguments(
         rulesDirectory.split('/').includes('..')
       )
         throw new CliUsageError('--rules-directory must stay within the workspace.');
+      index += 1;
+      continue;
+    }
+    if (argument === '--retrieval-root') {
+      codeRoots.push(optionValue(arguments_, index, argument));
+      index += 1;
+      continue;
+    }
+    if (argument === '--retrieval-tokens') {
+      const value = optionValue(arguments_, index, argument);
+      if (!/^[1-9][0-9]*$/u.test(value) || !Number.isSafeInteger(Number(value)))
+        throw new CliUsageError('--retrieval-tokens requires a positive integer.');
+      retrievalTokens = Number(value);
       index += 1;
       continue;
     }
@@ -261,6 +281,19 @@ export function parsePhaseOneCliArguments(
   }
 
   const prompt = promptParts.join(' ').trim();
+  let retrieval: PhaseOneCliConfig['retrieval'];
+  if (codeRoots.length > 0 || retrievalTokens !== undefined) {
+    try {
+      retrieval = {
+        roots: retrievalRoots(codeRoots, rulesDirectory),
+        ...(retrievalTokens === undefined ? {} : { maxTokens: retrievalTokens }),
+      };
+    } catch {
+      throw new CliUsageError(
+        'Retrieval requires one to eight valid roots within --rules-directory, outside excluded directories.',
+      );
+    }
+  }
   if (prompt.length === 0) throw new CliUsageError('Provide a non-empty user prompt.');
   try {
     validateBudget({ windowTokens, outputReserveTokens });
@@ -279,6 +312,7 @@ export function parsePhaseOneCliArguments(
       ...(permissionRules.length === 0 ? {} : { permissionRules }),
       ...(budgetProvided ? { contextBudget: { windowTokens, outputReserveTokens } } : {}),
       ...(rulesDirectory === undefined ? {} : { rulesDirectory }),
+      ...(retrieval === undefined ? {} : { retrieval }),
       ...(skillNames.length === 0 ? {} : { skillNames: [...new Set(skillNames)] }),
       ...(userSkillsDirectory === undefined ? {} : { userSkillsDirectory }),
       ...(autoSkills ? { autoSkills } : {}),
@@ -338,6 +372,21 @@ export async function runPhaseOneCli(
     hooks,
     sampler: options.sampler,
     contextBuilder: new ContextBuilder(options.tracer, {
+      ...(options.retrieval === undefined
+        ? {}
+        : {
+            codeRetrieval: {
+              retriever: new LexicalCodeRetriever(fileSystem, options.tracer, {
+                roots: options.retrieval.roots,
+                ...(options.rulesDirectory === undefined
+                  ? {}
+                  : { rulesDirectory: options.rulesDirectory }),
+              }),
+              ...(options.retrieval.maxTokens === undefined
+                ? {}
+                : { maxTokens: options.retrieval.maxTokens }),
+            },
+          }),
       ...(options.contextBudget === undefined ? {} : { budget: options.contextBudget }),
       sampler: options.sampler,
       additionalSources: [

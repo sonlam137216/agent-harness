@@ -6,6 +6,7 @@ import { SamplingError, type ModelMessage, type ModelRequest } from '../model/sa
 import type { TracingHandle } from '../observability/tracing.js';
 import type { Session } from '../session/session.js';
 import { compactTurns } from './compaction.js';
+import { codeContext, type CodeRetrievalOptions } from './retrieval/code/code-context.js';
 import {
   checkContextCancellation,
   ContextError,
@@ -39,6 +40,8 @@ export interface ContextBuilderOptions {
   readonly budget?: ContextBudget;
   readonly tokenCounter?: TokenCounter;
   readonly additionalSources?: readonly ContextSource[];
+  /** Optional code evidence uses only space left after required context fits. */
+  readonly codeRetrieval?: CodeRetrievalOptions;
   /** Enables model-assisted compaction. Without a sampler, irreducible overflow is an error. */
   readonly sampler?: Sampler;
   readonly toolResultMaxChars?: number;
@@ -73,6 +76,7 @@ export class ContextBuilder {
   readonly #summaryMaxTokens: number;
   readonly #keepRecentTurns: number;
   readonly #conversation = new ConversationSource();
+  readonly #codeRetrieval: CodeRetrievalOptions | undefined;
 
   public constructor(
     private readonly tracer: TracingHandle['tracer'],
@@ -86,7 +90,13 @@ export class ContextBuilder {
       ...(options.additionalSources ?? []),
       new ToolDefinitionsSource(),
     ];
-    const names = new Set(['conversation']);
+    this.#codeRetrieval = options.codeRetrieval;
+    if (this.#codeRetrieval !== undefined)
+      positiveInteger('retrieval.maxTokens', this.#codeRetrieval.maxTokens ?? 4096);
+    const names = new Set([
+      'conversation',
+      ...(this.#codeRetrieval === undefined ? [] : ['retrieval']),
+    ]);
     for (const source of this.#sources) {
       if (!/^[a-z][a-z0-9_]{0,63}$/u.test(source.name) || names.has(source.name))
         throw new RangeError('Context source names must be unique stable identifiers.');
@@ -299,16 +309,29 @@ export class ContextBuilder {
             'budget_exceeded',
             'Context exceeds the input budget and cannot be reduced safely.',
           );
+        const retrievalMessages =
+          this.#codeRetrieval === undefined
+            ? []
+            : await codeContext(
+                this.#codeRetrieval,
+                { ...input, session },
+                Math.min(this.#codeRetrieval.maxTokens ?? 4096, inputLimit - total(messages)),
+                this.#counter,
+                this.tracer,
+              );
+        checkContextCancellation(input);
+        const retrievalTokens = contributionTokens(this.#counter, retrievalMessages, []);
         const sources = {
           ...sourceTokens,
           conversation: contributionTokens(this.#counter, messages, []),
+          ...(this.#codeRetrieval === undefined ? {} : { retrieval: retrievalTokens }),
         };
         const accounting: ContextAccounting = {
           counter: this.#counter.name,
           estimated: true,
           inputLimit,
           baselineTokens,
-          totalTokens: total(messages),
+          totalTokens: total(messages) + retrievalTokens,
           framingTokens: REQUEST_FRAMING_TOKENS,
           sources,
           prunedResults,
@@ -317,7 +340,7 @@ export class ContextBuilder {
         const request: ModelRequest = {
           modelCallId: input.modelCallId,
           modelId: input.agent.model.modelId,
-          messages: [...fixedMessages, ...messages],
+          messages: [...fixedMessages, ...retrievalMessages, ...messages],
           tools,
           maxOutputTokens: this.#budget.outputReserveTokens,
         };

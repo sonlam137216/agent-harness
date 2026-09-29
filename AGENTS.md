@@ -21,6 +21,11 @@ If code and documentation disagree, stop and update the architecture intentional
 
 The repository has completed **Phase 6 — MCP and Dynamic Tool Retrieval**.
 
+Phase 7 has completed **7.1 — Exploration Benchmark** and **7.2 — Bounded Lexical
+Retrieval**: versioned evaluation tasks plus opt-in code excerpts from explicit
+roots, packed into spare context capacity. See `docs/PHASE-7.md`. Live comparative
+quality/savings evaluation remains Phase 7.3; no savings are claimed yet.
+
 Phase 1 core and its read-only CLI are complete, including OpenAI Responses, Anthropic Messages, and Ollama Chat adapters. Phase 2 adds budget-aware context sources, scoped project rules, historical tool-result pruning, and model-assisted compaction with in-memory checkpoints. See `docs/CONTEXT-ENGINE.md` for the current contract and limits.
 
 Phase 3 replaces the read-only bridge guard with explicit permissions, adds seven lifecycle hooks, and connects canonical events to in-memory persistence and tracing. See `docs/PHASE-3.md`.
@@ -31,7 +36,9 @@ Phase 5 adds bounded project/user skill discovery, explicit and opt-in automatic
 
 Phase 6 adds explicit MCP configuration, stdio/Streamable HTTP adapters, bounded BM25 catalog search, and target-authorized invocation. See `docs/PHASE-6.md`. Native tools remain read-only; Workspace owns only the application-side process capability needed for stdio.
 
-Implement one roadmap capability at a time. Do not start Phase 7 or another capability until explicitly requested. Native file mutation and command execution remain unavailable.
+Implement one roadmap capability at a time. The next planned capability is Phase 7.3,
+retrieval evaluation; do not start another capability until explicitly requested.
+Native file mutation and command execution remain unavailable.
 
 Do not implement advanced capabilities before the core end-to-end loop works.
 
