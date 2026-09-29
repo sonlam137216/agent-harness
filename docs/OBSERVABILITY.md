@@ -1,5 +1,14 @@
 # Observability and Tracing Architecture
 
+## Phase 9 subagents
+
+`subagent.spawn` is a child of the parent's `tool.execute` (`delegate_task`), and the
+child's `session.run` tree nests under it in the same trace. It records `subagent.id`,
+role, background flag, parent session/turn/tool-call IDs, child `subagent.session_id`,
+outcome, limits, iterations, tool calls, source count, report length and truncation, and
+token usage. Task and report text and paths are never recorded. Child sessions persist
+`metadata.parent` as the durable link. See [PHASE-9.md](PHASE-9.md).
+
 ## Phase 8.1 memory
 
 `context.memory` is a child of `context.build` and owns memory selection. It records
@@ -117,14 +126,14 @@ Session Trace
 └── Turn Span
 ```
 
-When Phase 9 introduces subagents, they should create child or linked traces:
+Phase 9 subagents create child traces:
 
 ```text
 Parent Turn
     │
     └── subagent.spawn
             │
-            └── Child Session Trace
+            └── Child Session Trace (session.run → turn.run → …)
 ```
 
 ---
@@ -144,7 +153,7 @@ Add these only with their owning capabilities:
 
 ```text
 loop_iteration   (Phase 1 counter, not a globally unique ID)
-subagent_id
+subagent_id      (Phase 9)
 workspace_id
 ```
 

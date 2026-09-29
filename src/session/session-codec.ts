@@ -135,6 +135,7 @@ export function validateSession(value: unknown, expectedId?: string): asserts va
       'provider',
       'contextBudget',
       'rulesDirectory',
+      'parent',
     ]);
     timestamp(metadata.createdAt);
     timestamp(metadata.updatedAt);
@@ -144,6 +145,17 @@ export function validateSession(value: unknown, expectedId?: string): asserts va
     nonempty(object(agent.model, ['modelId']).modelId);
     for (const key of ['workspaceRoot', 'provider', 'rulesDirectory'])
       if (metadata[key] !== undefined) nonempty(metadata[key]);
+    if (metadata.parent !== undefined) {
+      const parent = object(metadata.parent, [
+        'sessionId',
+        'turnId',
+        'toolCallId',
+        'subagentId',
+        'role',
+      ]);
+      if (!validRecordKey(string(parent.sessionId)) || parent.sessionId === id) fail();
+      for (const key of ['turnId', 'toolCallId', 'subagentId', 'role']) nonempty(parent[key]);
+    }
     if (metadata.contextBudget !== undefined) {
       const budget = object(metadata.contextBudget, ['windowTokens', 'outputReserveTokens']);
       if (

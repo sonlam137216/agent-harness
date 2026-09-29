@@ -15,8 +15,9 @@ Learning-oriented AI coding-agent harness in TypeScript (strict, ESM, Node >= 22
 Phases 0–6 are committed; Phase 7.1–7.3b (benchmark, lexical code retrieval, coverage
 signals, per-turn scan cache) and Phase 8.1–8.3 (opt-in Markdown memory read path;
 `memory add` and permission-gated `save_memory`; `sessions summarize`) are implemented.
-Phase 7.3c (live evaluation) is deferred pending a stronger tool-calling model. The next
-roadmap phase is 9 (subagents). Do not start another capability unless explicitly requested. Workspace file tools are read-only; `save_memory` only appends notes.
+Phase 9 (opt-in `--subagents`: read-only explore/plan/review child sessions, background
+delegation, depth 1) is implemented. Phase 7.3c (live evaluation) is deferred pending a
+stronger tool-calling model. The next roadmap phase is 10 (worktrees). Do not start another capability unless explicitly requested. Workspace file tools are read-only; `save_memory` only appends notes.
 
 Main flow: `cli` (composition root) → `runtime/SessionRuntime` → `runtime/AgentLoop` →
 `context/ContextBuilder` + `model/Sampler` + `tools/ToolBridge` → `workspace` / `mcp`.

@@ -30,7 +30,7 @@ export interface SessionRuntimeRunInput {
   readonly sessionId?: SessionId;
   readonly configuration?: Pick<
     SessionMetadata,
-    'workspaceRoot' | 'provider' | 'contextBudget' | 'rulesDirectory'
+    'workspaceRoot' | 'provider' | 'contextBudget' | 'rulesDirectory' | 'parent'
   >;
   readonly signal?: AbortSignal;
   /** Absolute Unix timestamp in milliseconds. */

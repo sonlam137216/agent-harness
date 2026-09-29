@@ -10,6 +10,7 @@ export type SessionId = BrandedId<'SessionId'>;
 export type TurnId = BrandedId<'TurnId'>;
 export type ModelCallId = BrandedId<'ModelCallId'>;
 export type ToolCallId = BrandedId<'ToolCallId'>;
+export type SubagentId = BrandedId<'SubagentId'>;
 
 export function createSessionId(): SessionId {
   return randomUUID() as SessionId;
@@ -25,4 +26,8 @@ export function createModelCallId(): ModelCallId {
 
 export function createToolCallId(): ToolCallId {
   return randomUUID() as ToolCallId;
+}
+
+export function createSubagentId(): SubagentId {
+  return randomUUID() as SubagentId;
 }

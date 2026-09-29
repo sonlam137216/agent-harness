@@ -18,6 +18,23 @@ This document describes both the small current implementation shape and the inte
 
 ## 2. Target High-Level Architecture
 
+### Phase 9 subagent decision
+
+Subagents are a new `src/subagents/` module next to Runtime. A child is an isolated
+session: `SubagentRunner` composes its own `SessionRuntime`, `AgentLoop`, `ToolRegistry`,
+`PermissionEngine` and `EventBus` from injected interfaces (Sampler, a rules-only
+ContextBuilder, SessionStore, native read-only tools), runs one turn, and returns a
+bounded handoff: the report, the files it read, and usage. `SubagentManager` owns
+per-run start and concurrency limits, background handles, cancellation, and cleanup at
+run end. The parent-facing `delegate_task`, `await_subagent` and `cancel_subagent` tools
+depend only on the manager, so `Tool → Sampler` stays disallowed: the tools never sample
+or touch Workspace. Depth is 1 by construction. The runner refuses delegation, write,
+execute or external tools, and children never receive a manager. Children inherit the
+parent's permission rules in `auto` mode without an approval handler. Child sessions
+carry `metadata.parent` for durable correlation. Their `subagent.spawn` span nests under
+the parent's `tool.execute`. Runtime, AgentLoop, ToolBridge and ContextBuilder are
+unchanged. See [PHASE-9.md](PHASE-9.md).
+
 ### Phase 8.3 session summary decision
 
 `SessionSummarizer` (Memory) turns a saved Session into one memory entry. It depends on
@@ -805,32 +822,26 @@ Memory feeds Context. It should not mutate runtime behavior directly.
 
 ### 4.12 Subagents
 
-Later phase:
+Current implementation (Phase 9):
 
 ```text
 src/subagents/
-├── subagent-manager.ts
-├── subagent-runner.ts
-└── subagent-definition.ts
+├── subagent-definition.ts   # explore / plan / review roles, delegation tool names
+├── subagent-runner.ts       # one isolated child session, token budget, bounded handoff
+├── subagent-manager.ts      # limits, background handles, cancel, close
+└── subagent-tools.ts        # delegate_task / await_subagent / cancel_subagent
 ```
 
-Subagents are child sessions with independent context.
-
-Initial rule:
+Subagents are child sessions with independent context, model loop, tool scope and
+lifecycle. The rule is:
 
 ```text
 max nesting depth = 1
 ```
 
-Possible roles:
-
-- explore
-- plan
-- test
-- review
-- general-purpose
-
-Worktree isolation can be added later for agents that modify files.
+Children are read-only. A test role waits for command execution, and a general-purpose
+editing role waits for worktree isolation (Phase 10), which will let agents that modify
+files work without sharing a working tree.
 
 ---
 
@@ -1005,6 +1016,10 @@ Tool interface / ToolRegistry
   ├── Native tool → narrow Workspace capability
   └── MCP adapter → MCP client
 
+Delegation tools
+  ↓
+SubagentManager → SubagentRunner → child SessionRuntime (Runtime interfaces only)
+
 Context
   ↓
 Retrieval / Skills / Rules / Memory
@@ -1025,6 +1040,9 @@ Memory → Workspace mutation ❌  (except appending notes via NoteStorage, Phas
 Context → shell execution   ❌
 Runtime → concrete provider ❌
 Runtime → concrete workspace ❌
+Subagent tool → Sampler      ❌  (tools reach children only through SubagentManager)
+Child → delegation tools     ❌  (depth 1)
+Child → write/execute tools  ❌  (until worktree isolation)
 ```
 
 Observability subscribers must not change business outcomes. The required persistence subscriber is an intentional exception: SessionStore failures surface rather than pretending the turn was saved. Subscribers do not reverse dependency direction.

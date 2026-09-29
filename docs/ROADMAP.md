@@ -461,16 +461,18 @@ Exit criteria:
 
 Goal: delegate parallel or specialized work.
 
-- [ ] `SubagentManager`
-- [ ] child session creation
-- [ ] max depth = 1
-- [ ] explore role
-- [ ] plan role
-- [ ] review/test role
-- [ ] background execution
-- [ ] result handoff
-- [ ] parent/child trace linking
-- [ ] capability restrictions
+- [x] `SubagentManager`
+- [x] child session creation (persisted, linked by `metadata.parent`)
+- [x] max depth = 1
+- [x] explore role
+- [x] plan role
+- [x] review role (test role deferred until command execution exists)
+- [x] background execution (`background: true`, `await_subagent`, `cancel_subagent`)
+- [x] result handoff (bounded report + sources + usage)
+- [x] parent/child trace linking
+- [x] capability restrictions (native read tools only, parent rules, token budget)
+
+See [PHASE-9.md](PHASE-9.md).
 
 Exit criteria:
 

@@ -1,4 +1,4 @@
-import type { ModelCallId, SessionId, TurnId } from '../ids.js';
+import type { ModelCallId, SessionId, SubagentId, ToolCallId, TurnId } from '../ids.js';
 import type { Turn } from './turn.js';
 import type { AgentDefinition } from '../agent/agent-definition.js';
 import type { StopReason, TokenUsage } from '../model/sampling-types.js';
@@ -12,6 +12,16 @@ export interface SessionMetadata {
   readonly provider?: string;
   readonly contextBudget?: { readonly windowTokens: number; readonly outputReserveTokens: number };
   readonly rulesDirectory?: string;
+  /** Present only on subagent child sessions (Phase 9); links back to the delegating call. */
+  readonly parent?: SubagentParentLink;
+}
+
+export interface SubagentParentLink {
+  readonly sessionId: SessionId;
+  readonly turnId: TurnId;
+  readonly toolCallId: ToolCallId;
+  readonly subagentId: SubagentId;
+  readonly role: string;
 }
 
 export interface ModelUsageRecord {

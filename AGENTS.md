@@ -43,16 +43,20 @@ spare-budget injection). Phase 8.2 adds `memory add` and the permission-gated
 `save_memory` tool, which can only append to memory note files. Phase 8.3 adds explicit
 `sessions summarize <id>`. See `docs/PHASE-8.md`.
 
-Implement one roadmap capability at a time. Phase 8's planned slices are complete; the
-next roadmap phase is Phase 9, subagents. Do not start another capability until
-explicitly requested.
+Phase 9 adds opt-in (`--subagents`) read-only child sessions: explore/plan/review roles,
+foreground or background delegation, bounded report handoff with sources, parent/child
+trace and session linking, max depth 1, and capability, token and concurrency limits.
+See `docs/PHASE-9.md`.
+
+Implement one roadmap capability at a time. Phase 9 is complete; the next roadmap phase
+is Phase 10, worktrees. Do not start another capability until explicitly requested.
 Native file mutation and command execution remain unavailable.
 
 Do not implement advanced capabilities before the core end-to-end loop works.
 
 Unless explicitly requested, do not implement:
 
-- subagents
+- subagents that modify files (subagents are read-only)
 - worktrees
 - sandboxing
 - plugins

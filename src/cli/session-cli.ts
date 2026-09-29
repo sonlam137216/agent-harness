@@ -149,6 +149,10 @@ export async function prepareSessionRun(
     throw new SessionStateError('The requested session does not exist.');
   const defaults: string[] = [];
   const metadata = saved?.metadata;
+  if (metadata?.parent !== undefined)
+    throw new SessionStateError(
+      'Subagent sessions cannot be resumed; inspect them with sessions show.',
+    );
   if (metadata !== undefined) {
     defaults.push('--model', metadata.agent.model.modelId);
     if (metadata.provider !== undefined) defaults.push('--provider', metadata.provider);
@@ -182,6 +186,9 @@ export async function runSessionCommand(
       updatedAt: metadata?.updatedAt,
       modelId: metadata?.agent.model.modelId,
       workspaceRoot: metadata?.workspaceRoot,
+      ...(metadata?.parent === undefined
+        ? {}
+        : { parentSessionId: metadata.parent.sessionId, subagentRole: metadata.parent.role }),
       turnCount,
       status,
       usage,
