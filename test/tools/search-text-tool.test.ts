@@ -78,6 +78,40 @@ describe('SearchTextTool', () => {
     expect(fileSystem.readFile).toHaveBeenCalledTimes(2);
   });
 
+  it('skips generated trees and unreadable files instead of failing the search', async () => {
+    const listDirectory = vi.fn<FileSystemCapability['listDirectory']>((path) =>
+      Promise.resolve(
+        path === '.'
+          ? [
+              { path: 'node_modules', name: 'node_modules', kind: 'directory' },
+              { path: '.git', name: '.git', kind: 'directory' },
+              { path: 'huge.lock', name: 'huge.lock', kind: 'file' },
+              { path: 'app.ts', name: 'app.ts', kind: 'file' },
+            ]
+          : [],
+      ),
+    );
+    const readFile = vi.fn<FileSystemCapability['readFile']>((path) =>
+      path === 'huge.lock'
+        ? Promise.reject(
+            new FileSystemError('too big', { code: 'output_limit_exceeded', requestedPath: path }),
+          )
+        : Promise.resolve({ path, content: 'needle', sizeBytes: 6 }),
+    );
+
+    const result = await new SearchTextTool({ listDirectory, readFile }).execute({
+      id: createToolCallId(),
+      name: 'search_text',
+      arguments: { query: 'needle', path: '' },
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'success',
+      output: { filesSearched: 1, filesSkipped: 1, matches: [{ path: 'app.ts' }] },
+    });
+    expect(listDirectory.mock.calls.map(([path]) => path)).toEqual(['.']);
+  });
+
   it('rejects invalid input before filesystem access', async () => {
     const fileSystem = createSearchFileSystem();
     const tool = new SearchTextTool(fileSystem);

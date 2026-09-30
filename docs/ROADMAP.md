@@ -566,6 +566,7 @@ the main session.
 - [x] 13.8 provider-aware context/output defaults and `--model-timeout`
 - [x] 13.9 tool progress lines on stderr for chat and one-shot runs
 - [x] 13.10 credential files hidden from tools and sandboxed commands; command approval warnings
+- [x] 13.11 OpenAI-compatible provider fixes from the first live runs (Groq)
 - [ ] token-level streaming
 - [ ] Linux sandbox backend
 - [ ] project configuration file

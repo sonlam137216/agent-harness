@@ -1,7 +1,7 @@
 import { trace } from '@opentelemetry/api';
 
 import type { ToolCallId } from '../../ids.js';
-import type { JsonObject } from '../../json.js';
+import type { JsonObject, JsonValue } from '../../json.js';
 import type { Sampler } from '../sampler.interface.js';
 import {
   SamplingError,
@@ -17,7 +17,8 @@ import {
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_BASE_DELAY_MS = 250;
-const DEFAULT_MAX_RETRY_DELAY_MS = 10_000;
+// Free-tier rate limits often ask for tens of seconds; Retry-After is honored up to this.
+const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 
 type FetchTransport = (input: string | URL, init?: RequestInit) => Promise<Response>;
 type RetryDelay = (delayMs: number, signal?: AbortSignal) => Promise<void>;
@@ -191,6 +192,45 @@ function mapMessage(message: ModelMessage): readonly OpenAIInputItem[] {
   }
 }
 
+/** Value limits that ToolBridge validation enforces; see withoutValueLimits. */
+const VALUE_LIMIT_KEYWORDS = new Set([
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'minLength',
+  'maxLength',
+  'minItems',
+  'maxItems',
+  'pattern',
+]);
+
+/**
+ * Removes value limits from a tool schema. Some OpenAI-compatible providers (e.g. Groq)
+ * reject a sampled call that breaks them with HTTP 400, which hides the call from the
+ * harness; ToolBridge validation stays authoritative and tells the model what to fix.
+ * Structure (types, required, enums, additionalProperties) is kept.
+ */
+function withoutValueLimits(schema: JsonObject): JsonObject {
+  const result: Record<string, JsonValue> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (VALUE_LIMIT_KEYWORDS.has(key) && typeof value !== 'object') continue;
+    if (key === 'properties' && isRecord(value)) {
+      result[key] = Object.fromEntries(
+        Object.entries(value).map(([name, property]) => [
+          name,
+          isRecord(property) ? withoutValueLimits(property) : property,
+        ]),
+      );
+    } else if (key === 'items' && isRecord(value)) {
+      result[key] = withoutValueLimits(value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 function mapRequest(request: ModelRequest): OpenAIResponsesRequest {
   return {
     model: request.modelId,
@@ -199,7 +239,7 @@ function mapRequest(request: ModelRequest): OpenAIResponsesRequest {
       type: 'function',
       name: tool.name,
       description: tool.description,
-      parameters: tool.inputSchema,
+      parameters: withoutValueLimits(tool.inputSchema),
       // The harness permits optional schema properties. Strict mode would require
       // rewriting that provider-neutral schema, so Phase 1 leaves it disabled.
       strict: false,
@@ -413,7 +453,11 @@ async function providerFailure(
   let code: SamplingError['code'] = 'provider_error';
   let retryable = false;
 
-  if (status === 400 || status === 404 || status === 422) {
+  if (status === 400 && providerCode === 'tool_use_failed') {
+    // Some OpenAI-compatible providers (e.g. Groq) reject a sampled tool call that fails
+    // their schema check. The request itself was valid; sampling again may succeed.
+    retryable = true;
+  } else if (status === 400 || status === 404 || status === 422) {
     code = 'invalid_request';
   } else if (status === 401 || status === 403) {
     code = 'authentication';

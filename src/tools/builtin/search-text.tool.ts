@@ -1,5 +1,8 @@
 import type { JsonValue } from '../../json.js';
-import type { FileSystemCapability } from '../../workspace/filesystem-capability.js';
+import {
+  FileSystemError,
+  type FileSystemCapability,
+} from '../../workspace/filesystem-capability.js';
 import type { Tool } from '../tool.interface.js';
 import { fileSystemToolFailure, invalidToolInput, toolSuccess } from '../tool-result.js';
 import type { ToolCall, ToolExecutionOptions, ToolResult } from '../tool-types.js';
@@ -8,6 +11,28 @@ import { validateSearchTextInput } from './input-validation.js';
 const DEFAULT_MAX_MATCHES = 100;
 const DEFAULT_MAX_VISITED_ENTRIES = 5_000;
 const DEFAULT_MAX_SNIPPET_CHARACTERS = 500;
+
+/** Generated or vendored trees skipped while walking; searching inside them explicitly works. */
+const SKIPPED_DIRECTORIES = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  'target',
+  'vendor',
+  '.next',
+  '.venv',
+  '__pycache__',
+]);
+
+/** Per-file failures that skip the file instead of failing the whole search. */
+const SKIPPED_FILE_ERRORS = new Set([
+  'output_limit_exceeded',
+  'not_file',
+  'protected_path',
+  'not_found',
+]);
 
 export interface SearchTextToolOptions {
   readonly maxMatches?: number;
@@ -47,7 +72,7 @@ export class SearchTextTool implements Tool {
       type: 'object',
       properties: {
         query: { type: 'string', minLength: 1, maxLength: 1_000 },
-        path: { type: 'string', minLength: 1, maxLength: 4_096 },
+        path: { type: 'string', maxLength: 4_096 },
       },
       required: ['query'],
       additionalProperties: false,
@@ -90,6 +115,7 @@ export class SearchTextTool implements Tool {
       const matches: JsonValue[] = [];
       let filesSearched = 0;
       let visitedEntries = 0;
+      let filesSkipped = 0;
       let truncated = false;
 
       while (directories.length > 0 && !truncated) {
@@ -104,12 +130,20 @@ export class SearchTextTool implements Tool {
             break;
           }
           if (entry.kind === 'directory') {
-            directories.push(entry.path);
+            if (!SKIPPED_DIRECTORIES.has(entry.name)) directories.push(entry.path);
             continue;
           }
           if (entry.kind !== 'file') continue;
 
-          const file = await this.fileSystem.readFile(entry.path, options);
+          let file;
+          try {
+            file = await this.fileSystem.readFile(entry.path, options);
+          } catch (error) {
+            if (!(error instanceof FileSystemError) || !SKIPPED_FILE_ERRORS.has(error.code))
+              throw error;
+            filesSkipped += 1;
+            continue;
+          }
           filesSearched += 1;
           if (file.content.includes('\0')) continue;
 
@@ -138,6 +172,7 @@ export class SearchTextTool implements Tool {
       return toolSuccess(call.id, {
         matches,
         filesSearched,
+        ...(filesSkipped === 0 ? {} : { filesSkipped }),
         truncated,
       });
     } catch (error) {

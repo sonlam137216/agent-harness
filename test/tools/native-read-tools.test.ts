@@ -56,6 +56,20 @@ describe('Phase 1 read-only filesystem tools', () => {
     expect(fileSystem.listDirectory).toHaveBeenCalledWith('.', {});
   });
 
+  it('treats an empty optional path as the workspace root', async () => {
+    const fileSystem = createFileSystem();
+    const result = await new ListFilesTool(fileSystem.capability).execute({
+      id: createToolCallId(),
+      name: 'list_files',
+      arguments: { path: '' },
+    });
+    expect(result.outcome).toBe('success');
+    expect(fileSystem.listDirectory).toHaveBeenCalledWith('.', expect.anything());
+    expect(new ReadFileTool(fileSystem.capability).validateInput({ path: '' })).toMatchObject({
+      valid: false,
+    });
+  });
+
   it('publishes strict schemas and read-only model-facing definitions', () => {
     const fileSystem = createFileSystem();
     const registry = new ToolRegistry();

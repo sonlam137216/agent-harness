@@ -11,7 +11,7 @@ export class ListFilesTool implements Tool {
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', minLength: 1, maxLength: 4_096 },
+        path: { type: 'string', maxLength: 4_096 },
       },
       additionalProperties: false,
     },

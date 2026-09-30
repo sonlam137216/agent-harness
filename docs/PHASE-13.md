@@ -117,6 +117,32 @@ workspace file except `.git` without per-file approval, and flags inline code
 (`node -e`, `python3 -c`, …), because files it writes (e.g. `package.json` scripts) may
 later run outside the sandbox.
 
+### 13.11 OpenAI-compatible providers (verified with Groq)
+
+The first live runs used Groq's free tier through the OpenAI adapter
+(`OPENAI_BASE_URL=https://api.groq.com/openai/v1`, `openai/gpt-oss-120b`) and exposed four
+issues, now fixed:
+
+- Groq validates sampled tool calls against the declared schema and answers HTTP 400
+  `tool_use_failed`, so the harness never saw the call and could not tell the model what
+  was wrong. The adapter now sends tool schemas **without value limits** (min/max,
+  lengths, item counts, patterns); structure, `required`, enums and
+  `additionalProperties` stay. ToolBridge validation remains authoritative and returns an
+  `invalid_input` message the model corrects on its next call. A remaining
+  `tool_use_failed` is treated as retryable.
+- `list_files`/`search_text` accept `path: ""` as the workspace root.
+- `search_text` skips generated trees (`.git`, `node_modules`, `dist`, `build`,
+  `coverage`, `target`, `vendor`, `.next`, `.venv`, `__pycache__`) while walking and skips
+  unreadable files (too large, protected, vanished) with a `filesSkipped` count instead of
+  failing the whole search.
+- OpenAI and Anthropic adapters honor `Retry-After` up to 60 s (was 10 s), which free-tier
+  rate limits need.
+
+Live results (2026-09-30, Groq free tier, `openai/gpt-oss-120b`, `--context-window 32000`):
+a read-only question about this repository answered correctly with a citation (≈2 min,
+mostly rate-limit waits); a fix-the-failing-test task on a small project completed in
+12 s: run test → read → edit → rerun test passing.
+
 ### System prompt follows the run
 
 The main session's system prompt is derived from the current run's capabilities (MCP,

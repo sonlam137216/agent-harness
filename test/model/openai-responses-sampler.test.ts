@@ -240,6 +240,74 @@ describe('OpenAIResponsesSampler', () => {
     expect(retryDelay.mock.calls.map(([delayMs]) => delayMs)).toEqual([10, 50]);
   });
 
+  it('sends tool schemas without value limits, which the harness validates itself', async () => {
+    const fetch = vi.fn<FetchTransport>(() => Promise.resolve(successResponse()));
+    const sampler = new OpenAIResponsesSampler({ apiKey: API_KEY, fetch });
+    await sampler.sample(
+      request({
+        tools: [
+          {
+            name: 'run_command',
+            description: 'Run one program.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                command: { type: 'string', minLength: 1, maxLength: 64 },
+                args: { type: 'array', items: { type: 'string', maxLength: 10 }, maxItems: 3 },
+                timeoutSeconds: { type: 'integer', minimum: 1, maximum: 600 },
+                mode: { type: 'string', enum: ['a', 'b'] },
+              },
+              required: ['command'],
+              additionalProperties: false,
+            },
+          },
+        ],
+      }),
+    );
+    const body = fetch.mock.calls[0]?.[1]?.body;
+    if (typeof body !== 'string') throw new TypeError('Expected request body.');
+    expect((JSON.parse(body) as { tools: { parameters: unknown }[] }).tools[0]?.parameters).toEqual(
+      {
+        type: 'object',
+        properties: {
+          command: { type: 'string' },
+          args: { type: 'array', items: { type: 'string' } },
+          timeoutSeconds: { type: 'integer' },
+          mode: { type: 'string', enum: ['a', 'b'] },
+        },
+        required: ['command'],
+        additionalProperties: false,
+      },
+    );
+  });
+
+  it('resamples when a compatible provider rejects a generated tool call', async () => {
+    const responses = [errorResponse(400, 'tool_use_failed'), successResponse()];
+    const fetch = vi.fn<FetchTransport>(() =>
+      Promise.resolve(responses.shift() ?? successResponse()),
+    );
+    const sampler = new OpenAIResponsesSampler({
+      apiKey: API_KEY,
+      fetch,
+      retryDelay: () => Promise.resolve(),
+    });
+
+    await expect(sampler.sample(request())).resolves.toEqual(
+      expect.objectContaining({ text: 'Done.' }),
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    const invalid = new OpenAIResponsesSampler({
+      apiKey: API_KEY,
+      fetch: () => Promise.resolve(errorResponse(400, 'invalid_request_error')),
+      retryDelay: () => Promise.resolve(),
+    });
+    await expect(invalid.sample(request())).rejects.toMatchObject({
+      code: 'invalid_request',
+      retryable: false,
+    });
+  });
+
   it('does not retry authentication or exhausted-quota failures and sanitizes errors', async () => {
     const secretProviderMessage = `invalid ${API_KEY}`;
     const authenticationFetch = vi.fn<FetchTransport>(() =>

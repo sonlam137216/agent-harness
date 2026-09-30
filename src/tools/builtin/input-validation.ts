@@ -29,7 +29,8 @@ export function validateOptionalPath(input: JsonObject): ValidationResult<string
   if (!hasOnlyKeys(input, ['path'])) {
     return { valid: false, message: 'Only the optional string field "path" is allowed.' };
   }
-  if (input.path === undefined) return { valid: true, value: '.' };
+  // Models often send "" to mean the workspace root.
+  if (input.path === undefined || input.path === '') return { valid: true, value: '.' };
   if (!validPath(input.path)) {
     return { valid: false, message: 'The "path" field must be a non-empty string.' };
   }
@@ -59,12 +60,16 @@ export function validateSearchTextInput(input: JsonObject): ValidationResult<Sea
       message: 'The "query" field must be a non-empty string of at most 1000 characters.',
     };
   }
-  if (input.path !== undefined && !validPath(input.path)) {
-    return { valid: false, message: 'The "path" field must be a non-empty string.' };
+  if (input.path !== undefined && input.path !== '' && !validPath(input.path)) {
+    return { valid: false, message: 'The "path" field must be a string.' };
   }
 
   return {
     valid: true,
-    value: { path: input.path ?? '.', query: input.query },
+    // Models often send "" to mean the workspace root.
+    value: {
+      path: input.path === undefined || input.path === '' ? '.' : input.path,
+      query: input.query,
+    },
   };
 }

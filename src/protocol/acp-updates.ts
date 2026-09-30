@@ -56,7 +56,7 @@ export function toolKind(name: string): AcpToolKind {
 export function toolTitle(call: Pick<ToolCall, 'name' | 'arguments'>): string {
   const { path, command, role, query, title } = call.arguments;
   const detail = [path, command, role, query, title].find(
-    (value): value is string => typeof value === 'string',
+    (value): value is string => typeof value === 'string' && value !== '',
   );
   return (detail === undefined ? call.name : `${call.name} ${detail}`).slice(0, 200);
 }

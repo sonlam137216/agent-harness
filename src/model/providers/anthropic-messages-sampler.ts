@@ -36,7 +36,8 @@ const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_BASE_DELAY_MS = 250;
-const DEFAULT_MAX_RETRY_DELAY_MS = 10_000;
+// Free-tier rate limits often ask for tens of seconds; Retry-After is honored up to this.
+const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 
 export interface AnthropicMessagesSamplerOptions {
   readonly apiKey: string;
