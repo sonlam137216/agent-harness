@@ -63,16 +63,26 @@ JSON-RPC over stdio with session/new, session/load, session/prompt, session/canc
 streamed session/update and session/request_permission. Each prompt runs through the
 same composition as the CLI, and sessions are shared with it. See `docs/PHASE-12.md`.
 
-Implement one roadmap capability at a time. Phases 0–12 of the roadmap are complete
+Phase 13 makes the harness practical on real projects by composing existing
+capabilities for the main session: opt-in `--edit` (write/edit in the main working
+tree, approval by default), `--commands` (`run_command` in the main tree under the same
+Seatbelt sandbox), `--max-iterations` (CLI default 25), an interactive `chat` command,
+concurrent approval-free read-only tool calls, Anthropic prompt caching, quiet span
+export, provider-aware budgets, model request timeouts, terminal tool progress, and
+credential files hidden from tools and sandboxed commands. See `docs/PHASE-13.md`.
+
+Implement one roadmap capability at a time. Phases 0–13 of the roadmap are complete
 (Phase 7.3c live evaluation remains deferred). Do not start another capability until
-explicitly requested. The model never writes the main working tree, and commands run
-only in implement children under the OS sandbox.
+explicitly requested. The model writes the main working tree only when a run passes
+`--edit`, and every write goes through the permission engine (ask by default). Commands
+run only under the OS sandbox: in the main tree with `--commands`, or in implement
+children with `--sandbox`.
 
 Do not implement advanced capabilities before the core end-to-end loop works.
 
 Unless explicitly requested, do not implement:
 
-- file mutation outside disposable worktrees
+- file mutation without an explicit opt-in and a permission decision
 - command execution outside the sandbox
 - sandboxing
 - plugins

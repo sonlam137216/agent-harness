@@ -25,6 +25,18 @@ describe('tracing foundation', () => {
     await tracing.shutdown();
   });
 
+  it('records real trace IDs without exporting when the exporter is null', async () => {
+    const tracing = createTracing({ exporter: null });
+    const traceId = tracing.tracer.startActiveSpan('quiet', (span) => {
+      const id = span.spanContext().traceId;
+      span.end();
+      return id;
+    });
+    expect(traceId).toMatch(/^[0-9a-f]{32}$/u);
+    expect(traceId).not.toBe('0'.repeat(32));
+    await tracing.shutdown();
+  });
+
   it('contains synchronous exporter failures', async () => {
     const failures: unknown[] = [];
     const exporter: SpanExporter = {

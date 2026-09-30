@@ -14,7 +14,8 @@ const DEFAULT_TRACER_NAME = 'agent-harness';
 let contextManagerInstallationAttempted = false;
 
 export interface TracingOptions {
-  exporter?: SpanExporter;
+  /** Defaults to console export; `null` records spans (real trace IDs) without exporting. */
+  exporter?: SpanExporter | null;
   onError?: (error: unknown) => void;
   serviceName?: string;
   tracerName?: string;
@@ -97,15 +98,21 @@ export function createTracing(options: TracingOptions = {}): TracingHandle {
 
   try {
     ensureAsyncContextPropagation();
-    const exporter = new GuardedSpanExporter(
-      options.exporter ?? new ConsoleSpanExporter(),
-      options.onError,
-    );
     const provider = new NodeTracerProvider({
       resource: resourceFromAttributes({
         'service.name': options.serviceName ?? DEFAULT_TRACER_NAME,
       }),
-      spanProcessors: [new SimpleSpanProcessor(exporter)],
+      spanProcessors:
+        options.exporter === null
+          ? []
+          : [
+              new SimpleSpanProcessor(
+                new GuardedSpanExporter(
+                  options.exporter ?? new ConsoleSpanExporter(),
+                  options.onError,
+                ),
+              ),
+            ],
     });
 
     return {

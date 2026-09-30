@@ -16,6 +16,7 @@ export class ListFilesTool implements Tool {
       additionalProperties: false,
     },
     accessKind: 'read',
+    concurrent: true,
   } as const;
 
   public constructor(private readonly fileSystem: FileSystemCapability) {}

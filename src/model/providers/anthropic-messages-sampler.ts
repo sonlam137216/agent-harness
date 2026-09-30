@@ -122,24 +122,51 @@ function mergeAdjacentMessages(messages: readonly AnthropicMessage[]): readonly 
   return merged;
 }
 
+const CACHE_BREAKPOINT = { cache_control: { type: 'ephemeral' } } as const;
+
+/**
+ * Marks the last block of the conversation as a cache breakpoint so the next loop
+ * iteration reuses everything up to it. Tools and system carry their own breakpoints.
+ */
+function withConversationBreakpoint(
+  messages: readonly AnthropicMessage[],
+): readonly (AnthropicMessage | Record<string, unknown>)[] {
+  const last = messages.at(-1);
+  if (last === undefined) return messages;
+  const blocks =
+    typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content;
+  if (blocks.length === 0) return messages;
+  return [
+    ...messages.slice(0, -1),
+    {
+      role: last.role,
+      content: [...blocks.slice(0, -1), { ...blocks.at(-1), ...CACHE_BREAKPOINT }],
+    },
+  ];
+}
+
 function serializeRequest(request: ModelRequest, maxOutputTokens: number): string {
   try {
+    const system = request.messages
+      .filter((message) => message.role === 'system')
+      .map((message) => message.content)
+      .join('\n\n');
     return JSON.stringify({
       model: request.modelId,
       max_tokens: request.maxOutputTokens ?? maxOutputTokens,
-      system: request.messages
-        .filter((message) => message.role === 'system')
-        .map((message) => message.content)
-        .join('\n\n'),
-      messages: mergeAdjacentMessages(
-        request.messages
-          .map(mapMessage)
-          .filter((message): message is AnthropicMessage => message !== undefined),
+      ...(system === '' ? {} : { system: [{ type: 'text', text: system, ...CACHE_BREAKPOINT }] }),
+      messages: withConversationBreakpoint(
+        mergeAdjacentMessages(
+          request.messages
+            .map(mapMessage)
+            .filter((message): message is AnthropicMessage => message !== undefined),
+        ),
       ),
-      tools: request.tools.map((tool) => ({
+      tools: request.tools.map((tool, index) => ({
         name: tool.name,
         description: tool.description,
         input_schema: tool.inputSchema,
+        ...(index === request.tools.length - 1 ? CACHE_BREAKPOINT : {}),
       })),
     });
   } catch {
@@ -169,8 +196,13 @@ function readUsage(payload: Record<string, unknown>): TokenUsage {
     throw invalidProviderResponse('The provider response contained invalid token usage.');
   }
   const cachedInputTokens = payload.usage.cache_read_input_tokens;
+  const cacheWriteTokens = payload.usage.cache_creation_input_tokens;
+  // Anthropic reports uncached input only; count cache reads and writes as input too.
   return {
-    inputTokens,
+    inputTokens:
+      inputTokens +
+      (isNonNegativeNumber(cachedInputTokens) ? cachedInputTokens : 0) +
+      (isNonNegativeNumber(cacheWriteTokens) ? cacheWriteTokens : 0),
     outputTokens,
     ...(isNonNegativeNumber(cachedInputTokens) ? { cachedInputTokens } : {}),
   };

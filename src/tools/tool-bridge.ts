@@ -49,6 +49,27 @@ export class ToolBridge {
     this.#permissions = options.permissions ?? new PermissionEngine();
   }
 
+  /**
+   * True when the call targets a visible `concurrent` tool that permissions allow without
+   * approval, so it can run alongside other such calls. Execution still re-checks everything.
+   */
+  public canRunConcurrently(call: ToolCall, context: ToolBridgeExecutionContext): boolean {
+    const tool = this.registry.get(call.name);
+    if (tool === undefined || this.registry.isHidden(call.name)) return false;
+    const { definition } = tool;
+    if (definition.concurrent !== true || tool.resolveInvocation !== undefined) return false;
+    return (
+      this.#permissions.evaluate({
+        sessionId: context.sessionId,
+        turnId: context.turnId,
+        modelCallId: context.modelCallId,
+        call,
+        accessKind: definition.accessKind,
+        ...(definition.destructive === undefined ? {} : { destructive: definition.destructive }),
+      }).decision === 'allow'
+    );
+  }
+
   public readonly execute = async (
     requestedCall: ToolCall,
     context: ToolBridgeExecutionContext,

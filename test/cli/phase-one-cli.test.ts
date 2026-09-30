@@ -169,6 +169,7 @@ describe('Phase 1 CLI', () => {
         modelId: 'flag-model',
         workspaceRoot: '/workspace/repo',
         prompt: 'inspect package.json',
+        contextBudget: { windowTokens: 128_000, outputReserveTokens: 16_384 },
       },
     });
   });
@@ -183,7 +184,12 @@ describe('Phase 1 CLI', () => {
     ).toEqual({
       help: false,
       provider: 'ollama',
-      config: { modelId: 'env-model', workspaceRoot: '/workspace', prompt: 'answer' },
+      config: {
+        modelId: 'env-model',
+        workspaceRoot: '/workspace',
+        prompt: 'answer',
+        contextBudget: { windowTokens: 32_768, outputReserveTokens: 4_096 },
+      },
     });
     expect(() => parsePhaseOneCliArguments(['answer'], {}, '/workspace')).toThrow(CliUsageError);
     expect(() => parsePhaseOneCliArguments(['--model', 'model-only'], {}, '/workspace')).toThrow(
@@ -196,6 +202,23 @@ describe('Phase 1 CLI', () => {
         '/workspace',
       ),
     ).toThrow('Unknown provider');
+  });
+
+  it('fills an unset budget half from the provider defaults', () => {
+    expect(
+      parsePhaseOneCliArguments(
+        ['--provider', 'anthropic', '--model', 'm', '--context-window', '100000', 'x'],
+        {},
+        '/workspace',
+      ),
+    ).toMatchObject({
+      config: { contextBudget: { windowTokens: 100_000, outputReserveTokens: 16_384 } },
+    });
+    expect(
+      parsePhaseOneCliArguments(['--provider', 'anthropic', '--model', 'm', 'x'], {}, '/workspace'),
+    ).toMatchObject({
+      config: { contextBudget: { windowTokens: 200_000, outputReserveTokens: 16_384 } },
+    });
   });
 
   it('accepts explicit context budgets and rule scope and rejects invalid settings', () => {

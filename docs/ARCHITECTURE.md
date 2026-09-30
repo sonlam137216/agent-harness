@@ -18,6 +18,28 @@ This document describes both the small current implementation shape and the inte
 
 ## 2. Target High-Level Architecture
 
+### Phase 13 practical-use decision
+
+The main session can act on the user's project when a run opts in, using only
+capabilities that already exist. `--edit` registers `write_file`/`edit_file` over a
+`LocalFileWriter` rooted at the workspace; `--commands` registers `run_command` over a
+`SeatbeltCommandRunner` whose policy root is the workspace (`.git` protected, no network).
+Either flag makes `ask` the default permission mode, and the terminal approval prompt
+renders a diff or argv preview. ToolDefinition gains an optional `concurrent` flag;
+ToolBridge exposes `canRunConcurrently(call)` (visible, `concurrent`, allowed without
+approval) and AgentLoop runs a response's calls concurrently only when all of them
+qualify, keeping transcript order. The CLI adds `--max-iterations` (default 25) and a
+`chat` command that runs each line as a turn through the same `runPhaseOneCli`
+composition. The Anthropic adapter adds cache breakpoints. The CLI selects span export with
+`AGENT_HARNESS_TRACE` (off by default; tracing still records spans) and derives the
+system prompt from the run's capabilities. Later slices add provider-aware budget
+defaults, a `withRequestTimeout` Sampler decorator (model layer), a stderr progress
+subscriber on the existing EventBus, and a Workspace-level sensitive-path definition
+enforced both by `LocalFileSystemCapability` (hidden from listings and reads) and by
+`SandboxPolicy.hideSensitiveFiles` (Seatbelt deny rules). Runtime, SessionRuntime,
+ContextBuilder, PermissionEngine and the Session schema are unchanged. See
+[PHASE-13.md](PHASE-13.md).
+
 ### Phase 12 protocol decision
 
 External clients use the Agent Client Protocol (ACP, JSON-RPC 2.0 over stdio), which is
@@ -1112,7 +1134,8 @@ Child → delegation tools     ❌  (depth 1)
 Child → write tools          ❌  (except implement, rooted in its own worktree)
 Child → execute tools        ❌  (except implement: run_command under the OS sandbox)
 Unsandboxed command execution ❌
-Model → main working tree write ❌  (applying worktree changes is a user command)
+Model → main working tree write ❌  (except with --edit, through PermissionEngine, Phase 13)
+Main-tree tool → unconfined Node fs/process ❌  (only FileWriteCapability / sandboxed CommandCapability)
 Worktrees → Runtime          ❌
 Protocol → CLI / providers / concrete workspace ❌  (prompts go through AcpPromptRunner)
 Protocol-mode stdout → anything but protocol messages ❌

@@ -143,6 +143,8 @@ export async function prepareSessionRun(
   environment: Readonly<Record<string, string | undefined>>,
   cwd: string,
   store: SessionStore,
+  /** `requirePrompt: false` for interactive runs that read prompts later. */
+  options: { readonly requirePrompt?: boolean } = {},
 ) {
   const saved = command.resumeId === undefined ? undefined : await store.get(command.resumeId);
   if (command.resumeId !== undefined && saved === undefined)
@@ -168,7 +170,12 @@ export async function prepareSessionRun(
       );
   }
   return {
-    parsed: parsePhaseOneCliArguments([...defaults, ...command.arguments], environment, cwd),
+    parsed: parsePhaseOneCliArguments(
+      [...defaults, ...command.arguments],
+      environment,
+      cwd,
+      options,
+    ),
     ...(metadata === undefined ? {} : { savedAgent: metadata.agent }),
   };
 }

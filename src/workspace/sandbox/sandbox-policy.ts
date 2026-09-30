@@ -15,6 +15,8 @@ export interface SandboxPolicy {
   readonly privatePaths: readonly string[];
   /** Absolute paths inside `root` that stay read-only, e.g. the worktree's `.git` link. */
   readonly protectedPaths: readonly string[];
+  /** Make credential files below `root` unreadable (see sensitive-paths.ts). */
+  readonly hideSensitiveFiles?: boolean;
   /** Only `deny` exists; network access is never granted. */
   readonly network: 'deny';
   /** Bare executable names that may be started directly. */

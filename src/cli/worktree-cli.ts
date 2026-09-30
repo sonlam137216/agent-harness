@@ -45,7 +45,43 @@ export interface WorktreeSandboxSettings {
   readonly toolchainPaths: readonly string[];
   /** Never readable except where re-allowed; normally the user's home directory. */
   readonly privatePaths: readonly string[];
+  /** Keep credential files unreadable by commands (default: true). */
+  readonly hideSensitiveFiles?: boolean;
   readonly environment?: Readonly<Record<string, string | undefined>>;
+}
+
+/**
+ * `run_command` confined to `root` by the OS sandbox: allowlisted programs, no network,
+ * writes only inside `root`, `.git` read-only, private HOME/TMPDIR, filtered environment.
+ */
+export function createSandboxedRunCommand(
+  root: string,
+  sandbox: WorktreeSandboxSettings,
+  tracer: TracingHandle['tracer'],
+  extraReadPaths: readonly string[] = [],
+): RunCommandTool {
+  return new RunCommandTool(
+    new SeatbeltCommandRunner({
+      tracer,
+      ...(sandbox.environment === undefined ? {} : { environment: sandbox.environment }),
+      policy: {
+        root,
+        readPaths: [...sandbox.toolchainPaths, ...extraReadPaths],
+        privatePaths: sandbox.privatePaths,
+        protectedPaths: [join(root, '.git')],
+        network: 'deny',
+        hideSensitiveFiles: sandbox.hideSensitiveFiles ?? true,
+        commands: sandbox.commands,
+        environment: {
+          allow: ['PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM'],
+          set: { CI: '1', NO_COLOR: '1', FORCE_COLOR: '0' },
+        },
+        defaultTimeoutMs: 120_000,
+        maxTimeoutMs: 600_000,
+        maxOutputBytes: 16_384,
+      },
+    }),
+  );
 }
 
 /**
@@ -60,40 +96,22 @@ export function createWorktreeProvider(
   return {
     create: async ({ subagentId, parentSessionId }, signal) => {
       const record = await manager.create({ id: subagentId, parentSessionId }, signal);
-      const files = new LocalFileSystemCapability({ workspaceRoot: record.path, tracer });
+      const files = new LocalFileSystemCapability({
+        workspaceRoot: record.path,
+        tracer,
+        hideSensitiveFiles: true,
+      });
       const writer = new LocalFileWriter({ root: record.path, tracer });
       const commands =
         sandbox === undefined
           ? []
           : [
-              new RunCommandTool(
-                new SeatbeltCommandRunner({
-                  tracer,
-                  ...(sandbox.environment === undefined
-                    ? {}
-                    : { environment: sandbox.environment }),
-                  policy: {
-                    root: record.path,
-                    readPaths: [
-                      ...sandbox.toolchainPaths,
-                      // Linked dependencies resolve into the main tree: readable, not writable.
-                      ...(record.linkedPaths ?? []).map((path) =>
-                        join(record.repositoryRoot, path),
-                      ),
-                    ],
-                    privatePaths: sandbox.privatePaths,
-                    protectedPaths: [join(record.path, '.git')],
-                    network: 'deny',
-                    commands: sandbox.commands,
-                    environment: {
-                      allow: ['PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM'],
-                      set: { CI: '1', NO_COLOR: '1', FORCE_COLOR: '0' },
-                    },
-                    defaultTimeoutMs: 120_000,
-                    maxTimeoutMs: 600_000,
-                    maxOutputBytes: 16_384,
-                  },
-                }),
+              createSandboxedRunCommand(
+                record.path,
+                sandbox,
+                tracer,
+                // Linked dependencies resolve into the main tree: readable, not writable.
+                (record.linkedPaths ?? []).map((path) => join(record.repositoryRoot, path)),
               ),
             ];
       return {

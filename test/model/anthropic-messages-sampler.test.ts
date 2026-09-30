@@ -39,7 +39,12 @@ function successResponse(overrides: Record<string, unknown> = {}, headers?: Head
       role: 'assistant',
       content: [{ type: 'text', text: 'Done.' }],
       stop_reason: 'end_turn',
-      usage: { input_tokens: 20, output_tokens: 5, cache_read_input_tokens: 4 },
+      usage: {
+        input_tokens: 20,
+        output_tokens: 5,
+        cache_read_input_tokens: 4,
+        cache_creation_input_tokens: 6,
+      },
       ...overrides,
     },
     headers === undefined ? undefined : { headers },
@@ -54,6 +59,11 @@ describe('AnthropicMessagesSampler', () => {
     const body = fetch.mock.calls[0]?.[1]?.body;
     if (typeof body !== 'string') throw new TypeError('Expected request body.');
     expect(JSON.parse(body)).toMatchObject({ max_tokens: 123 });
+    // A plain-text final message becomes a block so it can carry the cache breakpoint.
+    const lastMessage = (JSON.parse(body) as { messages: { content: unknown }[] }).messages.at(-1);
+    expect(lastMessage?.content).toEqual([
+      expect.objectContaining({ type: 'text', cache_control: { type: 'ephemeral' } }),
+    ]);
     for (const maxOutputTokens of [0, -1, 1.5, NaN, Infinity]) {
       await expect(sampler.sample(request({ maxOutputTokens }))).rejects.toMatchObject({
         code: 'invalid_request',
@@ -90,7 +100,7 @@ describe('AnthropicMessagesSampler', () => {
     expect(JSON.parse(init.body)).toEqual({
       model: 'claude-sonnet-4-5',
       max_tokens: 4096,
-      system: 'System rules',
+      system: [{ type: 'text', text: 'System rules', cache_control: { type: 'ephemeral' } }],
       messages: [
         { role: 'user', content: 'Read a file' },
         {
@@ -108,7 +118,12 @@ describe('AnthropicMessagesSampler', () => {
         {
           role: 'user',
           content: [
-            { type: 'tool_result', tool_use_id: toolCallId, content: '{"outcome":"success"}' },
+            {
+              type: 'tool_result',
+              tool_use_id: toolCallId,
+              content: '{"outcome":"success"}',
+              cache_control: { type: 'ephemeral' },
+            },
           ],
         },
       ],
@@ -121,6 +136,7 @@ describe('AnthropicMessagesSampler', () => {
             properties: { path: { type: 'string' } },
             required: ['path'],
           },
+          cache_control: { type: 'ephemeral' },
         },
       ],
     });
@@ -128,7 +144,7 @@ describe('AnthropicMessagesSampler', () => {
       modelCallId: modelRequest.modelCallId,
       text: 'Done.',
       toolCalls: [],
-      usage: { inputTokens: 20, outputTokens: 5, cachedInputTokens: 4 },
+      usage: { inputTokens: 30, outputTokens: 5, cachedInputTokens: 4 },
       stopReason: 'end_turn',
     });
   });

@@ -6,6 +6,18 @@ import { OpenAIResponsesSampler } from './providers/openai-responses-sampler.js'
 export const MODEL_PROVIDERS = ['openai', 'anthropic', 'ollama'] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 
+/**
+ * Context defaults per provider when the user sets no budget: hosted frontier models have
+ * large windows and need room for whole-file writes; local Ollama models stay small.
+ */
+export const PROVIDER_CONTEXT_DEFAULTS: Readonly<
+  Record<ModelProvider, { readonly windowTokens: number; readonly outputReserveTokens: number }>
+> = {
+  anthropic: { windowTokens: 200_000, outputReserveTokens: 16_384 },
+  openai: { windowTokens: 128_000, outputReserveTokens: 16_384 },
+  ollama: { windowTokens: 32_768, outputReserveTokens: 4_096 },
+};
+
 export interface CreateSamplerOptions {
   readonly provider: ModelProvider;
   readonly environment: Readonly<Record<string, string | undefined>>;

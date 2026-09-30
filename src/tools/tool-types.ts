@@ -14,6 +14,8 @@ export interface ToolDefinition extends ModelToolDefinition {
   readonly accessKind: ToolAccessKind;
   readonly destructive?: boolean;
   readonly origin?: 'native' | 'external';
+  /** Side-effect free and safe to run alongside other concurrent calls. */
+  readonly concurrent?: boolean;
 }
 
 export interface ToolCall {

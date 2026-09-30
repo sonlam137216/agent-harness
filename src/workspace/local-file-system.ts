@@ -13,6 +13,7 @@ import {
   type FileReadOptions,
   type ReadFileResult,
 } from './filesystem-capability.js';
+import { isSensitivePath } from './sensitive-paths.js';
 
 const DEFAULT_MAX_READ_BYTES = 1024 * 1024;
 const DEFAULT_MAX_DIRECTORY_ENTRIES = 1_000;
@@ -23,6 +24,8 @@ export interface LocalFileSystemOptions {
   readonly tracer: TracingHandle['tracer'];
   readonly maxReadBytes?: number;
   readonly maxDirectoryEntries?: number;
+  /** Hide credential files (see sensitive-paths.ts) from reads and listings. */
+  readonly hideSensitiveFiles?: boolean;
 }
 
 interface NodeError extends Error {
@@ -70,6 +73,7 @@ export class LocalFileSystemCapability implements FileSystemCapability {
   readonly #tracer: TracingHandle['tracer'];
   readonly #maxReadBytes: number;
   readonly #maxDirectoryEntries: number;
+  readonly #hideSensitiveFiles: boolean;
 
   public constructor(options: LocalFileSystemOptions) {
     if (!isAbsolute(options.workspaceRoot)) {
@@ -78,6 +82,7 @@ export class LocalFileSystemCapability implements FileSystemCapability {
 
     this.#workspaceRoot = resolve(options.workspaceRoot);
     this.#tracer = options.tracer;
+    this.#hideSensitiveFiles = options.hideSensitiveFiles ?? false;
     this.#maxReadBytes = requirePositiveInteger(
       options.maxReadBytes ?? DEFAULT_MAX_READ_BYTES,
       'maxReadBytes',
@@ -174,11 +179,9 @@ export class LocalFileSystemCapability implements FileSystemCapability {
               );
             }
 
-            entries.push({
-              path: toWorkspacePath(root, resolve(target, entry.name)),
-              name: entry.name,
-              kind: entryKind(entry),
-            });
+            const path = toWorkspacePath(root, resolve(target, entry.name));
+            if (this.#hideSensitiveFiles && isSensitivePath(path)) continue;
+            entries.push({ path, name: entry.name, kind: entryKind(entry) });
           }
           this.#throwIfCancelled(requestedPath, options.signal);
           entries.sort((left, right) => left.name.localeCompare(right.name));
@@ -210,6 +213,8 @@ export class LocalFileSystemCapability implements FileSystemCapability {
       });
     }
 
+    this.#refuseSensitive(toWorkspacePath(this.#workspaceRoot, candidate), requestedPath);
+
     const [root, target] = await Promise.all([realpath(this.#workspaceRoot), realpath(candidate)]);
     this.#throwIfCancelled(requestedPath, signal);
     if (!isWithinRoot(root, target)) {
@@ -218,8 +223,18 @@ export class LocalFileSystemCapability implements FileSystemCapability {
         requestedPath,
       });
     }
+    // A symlink with an innocent name must not reveal a credential file.
+    this.#refuseSensitive(toWorkspacePath(root, target), requestedPath);
 
     return { root, target };
+  }
+
+  #refuseSensitive(path: string, requestedPath: string): void {
+    if (this.#hideSensitiveFiles && isSensitivePath(path))
+      throw new FileSystemError('This file may contain credentials and is hidden from the model.', {
+        code: 'protected_path',
+        requestedPath,
+      });
   }
 
   #throwIfCancelled(requestedPath: string, signal: AbortSignal | undefined): void {

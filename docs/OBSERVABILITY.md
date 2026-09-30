@@ -616,7 +616,7 @@ tool.execute span
 workspace.operation span
 ```
 
-The Phase 1 CLI uses this existing hierarchy and adds no presentation-specific span. Its real-provider entry point uses the console exporter, while the credential-free smoke path injects an in-memory exporter and verifies the same session → model → tool → workspace hierarchy. Final answer text is presentation output, not a trace attribute.
+The Phase 1 CLI uses this existing hierarchy and adds no presentation-specific span. Its real-provider entry point originally used the console exporter; since Phase 13 CLI commands select export with `AGENT_HARNESS_TRACE` (`off` by default, `stderr` or `console`) and still record spans so sessions keep trace IDs, while the credential-free smoke path injects an in-memory exporter and verifies the same session → model → tool → workspace hierarchy. Final answer text is presentation output, not a trace attribute.
 
 Tracing initialization and exporter failures must be contained, with a no-op fallback when setup cannot complete. Phase 1 verifies that observability failures do not alter real turn outcomes. If this foundation is present from the start, later MCP, retrieval, memory, subagents, and compaction can attach naturally to the same trace tree.
 

@@ -1,3 +1,4 @@
+import { sensitiveSeatbeltRules } from '../sensitive-paths.js';
 import type { SandboxPolicy } from './sandbox-policy.js';
 
 /** Paths were validated as plain absolute paths, so JSON quoting is a valid SBPL string. */
@@ -32,6 +33,7 @@ export function seatbeltProfile(policy: SandboxPolicy, temporaryDirectory: strin
       ? []
       : [`(deny file-read* ${subpaths(policy.privatePaths)})`]),
     `(allow file-read* ${subpaths(readable)})`,
+    ...(policy.hideSensitiveFiles === true ? sensitiveSeatbeltRules(policy.root) : []),
     `(allow file-write* ${subpaths([policy.root, temporaryDirectory])} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (regex #"^/dev/fd/"))`,
     ...(policy.protectedPaths.length === 0
       ? []

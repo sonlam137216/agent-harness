@@ -53,6 +53,7 @@ export class SearchTextTool implements Tool {
       additionalProperties: false,
     },
     accessKind: 'read',
+    concurrent: true,
   } as const;
 
   readonly #maxMatches: number;

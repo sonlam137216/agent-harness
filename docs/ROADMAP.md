@@ -550,6 +550,38 @@ can use the same harness runtime.
 
 ---
 
+# Phase 13 — Practical Use
+
+Goal: make the harness usable on a real project by composing existing capabilities for
+the main session.
+
+- [x] 13.1 direct edit mode (`--edit`): write/edit in the main tree, ask by default,
+  diff preview on approval
+- [x] 13.2 sandboxed commands in the main tree (`--commands`, macOS Seatbelt)
+- [x] 13.3 configurable loop limit (`--max-iterations`, CLI default 25)
+- [x] 13.4 interactive `chat` command over one persisted session
+- [x] 13.5 concurrent execution of approval-free read-only tool calls
+- [x] 13.6 Anthropic prompt caching
+- [x] 13.7 quiet terminal output (`AGENT_HARNESS_TRACE`, default off for CLI commands)
+- [x] 13.8 provider-aware context/output defaults and `--model-timeout`
+- [x] 13.9 tool progress lines on stderr for chat and one-shot runs
+- [x] 13.10 credential files hidden from tools and sandboxed commands; command approval warnings
+- [ ] token-level streaming
+- [ ] Linux sandbox backend
+- [ ] project configuration file
+
+See [PHASE-13.md](PHASE-13.md).
+
+Exit criteria:
+
+```text
+chat → read → edit (approved) → run tests (sandboxed) → fix → final answer
+```
+
+works on a real repository without worktree round trips.
+
+---
+
 # What Not to Do Early
 
 Avoid implementing these in Phase 1:

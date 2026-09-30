@@ -2,6 +2,16 @@
 
 Ngày đánh giá: 20/09/2026.
 
+Cập nhật 29/09/2026: Phase 13 (dùng thực tế) đã triển khai; xem [PHASE-13.md](PHASE-13.md).
+Main session có thể sửa working tree với `--edit` (hỏi duyệt từng lần, có preview diff),
+chạy lệnh trong sandbox với `--commands`, giới hạn vòng lặp `--max-iterations`
+(mặc định 25), lệnh tương tác `chat`, chạy song song tool đọc, prompt caching cho
+Anthropic và tắt export span ra terminal mặc định (`AGENT_HARNESS_TRACE`). Bổ sung
+30/09/2026: budget context/output theo provider, timeout cho request model
+(`--model-timeout`), hiển thị tiến trình tool trên stderr, ẩn file bí mật (`.env`, key…)
+khỏi tool và lệnh sandbox, cảnh báo trong prompt duyệt `run_command`. Chưa kiểm
+chứng với model thật trên tác vụ thật; streaming token và sandbox Linux vẫn còn thiếu.
+
 Cập nhật triển khai: Phase 7.1 (benchmark exploration) và Phase 7.2 (bounded lexical
 retrieval) đã hoàn thành; xem [PHASE-7.md](PHASE-7.md). Đánh giá so sánh với model
 thật và hiệu quả tiết kiệm token vẫn thuộc Phase 7.3.

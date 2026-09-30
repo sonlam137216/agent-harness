@@ -20,8 +20,15 @@ delegation, depth 1) and Phase 10 (`--worktrees`: an `implement` child edits onl
 own Git worktree; user runs `worktrees diff/apply/remove`) and Phase 11 (`--sandbox`:
 implement children get `run_command` under macOS Seatbelt, no network, writes only in the
 worktree) and Phase 12 (`acp`: Agent Client Protocol server over stdio sharing the CLI's
-runtime and sessions) are implemented. Phase 7.3c (live evaluation) is deferred pending a
-stronger tool-calling model. All roadmap phases through 12 are done. Do not start another capability unless explicitly requested. The main working tree is never written by the model; `save_memory` only appends notes.
+runtime and sessions) and Phase 13 (practical use: `--edit` main-tree edits with approval,
+`--commands` sandboxed `run_command` in the main tree, `--max-iterations`, interactive
+`chat`, concurrent read-only tools, Anthropic prompt caching, provider-aware budgets,
+`--model-timeout`, stderr tool progress, credential files hidden unless
+`--allow-sensitive-files`) are implemented. Phase 7.3c
+(live evaluation) is deferred pending a stronger tool-calling model. All roadmap phases
+through 13 are done. Do not start another capability unless explicitly requested. The
+model writes the main working tree only with `--edit` and a permission decision;
+commands always run under the OS sandbox.
 
 Main flow: `cli` (composition root) → `runtime/SessionRuntime` → `runtime/AgentLoop` →
 `context/ContextBuilder` + `model/Sampler` + `tools/ToolBridge` → `workspace` / `mcp`.
@@ -38,6 +45,7 @@ pnpm typecheck
 pnpm format                 # prettier --write
 pnpm validate               # format:check + lint + typecheck + test + smoke:persistence
 pnpm cli -- --provider ollama --model <model-id> "<prompt>"
+pnpm cli -- chat --provider anthropic --model <model-id> --edit --commands   # interactive
 node dist/src/cli/main.js acp --provider ollama --model <model-id>   # ACP server (after pnpm build)
 pnpm benchmark:exploration -- --repeats 2 --output /tmp/report.json
 ```

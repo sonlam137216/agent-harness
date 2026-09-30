@@ -16,6 +16,7 @@ import { createTracing, type TracingHandle } from '../../src/observability/traci
 import { AgentLoop, AgentLoopExecutionError } from '../../src/runtime/agent-loop.js';
 import type { Session } from '../../src/session/session.js';
 import type { Turn } from '../../src/session/turn.js';
+import { PermissionEngine } from '../../src/permissions/permission-engine.js';
 import { ReadFileTool } from '../../src/tools/builtin/read-file.tool.js';
 import { ToolBridge } from '../../src/tools/tool-bridge.js';
 import type { Tool } from '../../src/tools/tool.interface.js';
@@ -390,6 +391,95 @@ describe('AgentLoop', () => {
 
     expect(result.outcome).toBe('completed');
     expect(JSON.stringify(result.session)).not.toContain('private failure details');
+  });
+
+  function trackedTool(
+    name: string,
+    accessKind: Tool['definition']['accessKind'],
+    log: string[],
+    concurrent: boolean,
+  ): Tool {
+    return {
+      definition: {
+        name,
+        description: 'Records start/end order for this test.',
+        inputSchema: { type: 'object', additionalProperties: false },
+        accessKind,
+        ...(concurrent ? { concurrent: true } : {}),
+      },
+      validateInput: () => ({ valid: true }),
+      execute: async (call) => {
+        log.push(`start:${name}`);
+        await new Promise((resolve) => setTimeout(resolve, name === 'slow' ? 20 : 1));
+        log.push(`end:${name}`);
+        return { toolCallId: call.id, outcome: 'success', output: { name } };
+      },
+    };
+  }
+
+  async function runTwoCalls(first: string, second: string): Promise<Session> {
+    const ids = [createToolCallId(), createToolCallId()];
+    const sampler = new FakeSampler([
+      (request) =>
+        response(request, {
+          text: null,
+          toolCalls: [
+            { id: ids[0]!, name: first, arguments: {} },
+            { id: ids[1]!, name: second, arguments: {} },
+          ],
+          stopReason: 'tool_calls',
+        }),
+      (request) => response(request, { text: 'Done.', toolCalls: [], stopReason: 'end_turn' }),
+    ]);
+    const { session, turnId } = createActiveSession();
+    const result = await createLoop(sampler).run({
+      agent,
+      session,
+      turnId,
+      tools: registry.getModelDefinitions(),
+    });
+    expect(result.outcome).toBe('completed');
+    const results = getTurn(result.session, turnId).entries.filter(
+      (entry) => entry.kind === 'tool_result',
+    );
+    expect(results.map((entry) => entry.toolCallId)).toEqual(ids);
+    return result.session;
+  }
+
+  it('runs approval-free concurrent reads together and keeps call order', async () => {
+    const log: string[] = [];
+    registry.register(trackedTool('slow', 'read', log, true));
+    registry.register(trackedTool('fast', 'read', log, true));
+
+    await runTwoCalls('slow', 'fast');
+
+    expect(log).toEqual(['start:slow', 'start:fast', 'end:fast', 'end:slow']);
+  });
+
+  it('runs a batch sequentially when any call is not concurrent-safe', async () => {
+    const log: string[] = [];
+    registry.register(trackedTool('slow', 'read', log, true));
+    registry.register(trackedTool('fast', 'read', log, false));
+
+    await runTwoCalls('slow', 'fast');
+
+    expect(log).toEqual(['start:slow', 'end:slow', 'start:fast', 'end:fast']);
+  });
+
+  it('runs concurrent tools sequentially when a permission rule asks for approval', async () => {
+    const log: string[] = [];
+    registry.register(trackedTool('slow', 'read', log, true));
+    registry.register(trackedTool('fast', 'read', log, true));
+    bridge = new ToolBridge(registry, tracing.tracer, {
+      permissions: new PermissionEngine({
+        rules: [{ toolName: 'fast', decision: 'ask' }],
+        approve: () => true,
+      }),
+    });
+
+    await runTwoCalls('slow', 'fast');
+
+    expect(log).toEqual(['start:slow', 'end:slow', 'start:fast', 'end:fast']);
   });
 
   it('stops at the configured maximum iteration count', async () => {

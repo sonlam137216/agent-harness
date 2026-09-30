@@ -248,17 +248,38 @@ export class AgentLoop {
                 } satisfies IterationResult;
               }
 
-              for (const toolCall of response.toolCalls) {
-                const toolResult = await this.#toolBridge.execute(toolCall, {
-                  sessionId: session.id,
-                  turnId: input.turnId,
-                  modelCallId,
-                  ...(cancellation.signal === undefined ? {} : { signal: cancellation.signal }),
-                });
-                session = appendEntries(session, input.turnId, [
-                  { kind: 'tool_result', ...toolResult },
-                ]);
+              const toolContext = {
+                sessionId: session.id,
+                turnId: input.turnId,
+                modelCallId,
+                ...(cancellation.signal === undefined ? {} : { signal: cancellation.signal }),
+              };
+              // The harness, not the model, decides concurrency: only when every call is
+              // an approval-free, side-effect-free read. Results keep the call order.
+              const concurrent =
+                response.toolCalls.length > 1 &&
+                response.toolCalls.every((call) =>
+                  this.#toolBridge.canRunConcurrently(call, toolContext),
+                );
+              span.setAttribute('loop.concurrent_tools', concurrent);
+              if (concurrent) {
+                const toolResults = await Promise.all(
+                  response.toolCalls.map((call) => this.#toolBridge.execute(call, toolContext)),
+                );
+                session = appendEntries(
+                  session,
+                  input.turnId,
+                  toolResults.map((result) => ({ kind: 'tool_result', ...result })),
+                );
                 await input.onProgress?.(session);
+              } else {
+                for (const toolCall of response.toolCalls) {
+                  const toolResult = await this.#toolBridge.execute(toolCall, toolContext);
+                  session = appendEntries(session, input.turnId, [
+                    { kind: 'tool_result', ...toolResult },
+                  ]);
+                  await input.onProgress?.(session);
+                }
               }
 
               span.setAttribute('loop.outcome', 'continue');
